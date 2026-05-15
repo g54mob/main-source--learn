@@ -1,0 +1,224 @@
+<!-- ==== FILE: .windsurf/workflows/audit-phase.md ==== -->
+---
+description: Post-delivery self-audit — method-by-method source comparison + architecture rule check
+---
+
+## Setup
+
+1. Ask: "Which project?" → `{PROJECT}`. Ask: "Which phase?" → `{PHASE}`
+
+## Source Fidelity
+
+2. For every original source file in `MAIN-SOURCE/{PROJECT}/` mapped to this phase:
+   - Read original line-by-line
+   - Compare every public method, field, interface against `LEARN/{PROJECT}/phase-{PHASE}/`
+   - Log gaps: `| Original Method | Status | Notes |`
+3. Fix all gaps before proceeding
+
+## Architecture Rules
+
+4. Scan every `.cs` in `LEARN/{PROJECT}/phase-{PHASE}/` for:
+   - `FindObjectOfType` → replace with [SerializeField] / Owner chain / GameEvents
+   - Public methods nobody external calls → demote to private/protected
+   - Missing `// purpose:` on Raise/Subscribe
+   - SO_ with methods → move to consumer or SO_XxxExt
+   - `[SerializeField] public` → make private + Get/Set
+   - `{ get; set; }` → Get/Set methods (exceptions: interfaces, [Serializable], SO_, static collections)
+   - Singleton not in `1-Managers/` → move
+   - Raw string tags → HasTag(TagType.x)
+   - Missing `[AddComponentMenu]`
+   - Defensive null checks on inspector refs → remove
+
+## Doc Consistency
+
+5. Verify GUIDE.md filenames match actual files
+6. Verify FLOW.md event registry matches GameEvents.cs
+7. Verify each Dependency.md matches actual imports
+
+## Report
+
+8. Output: `| Check | Pass/Fail | Details |`
+
+<!-- ==== FILE: .windsurf/workflows/build-phase.md ==== -->
+---
+description: Build a new phase from scratch — reads all reference docs, generates scripts + documentation
+---
+
+## Setup
+
+1. Ask: "Which project?" → `{PROJECT}`. Ask: "Which phase?" → `{PHASE}`
+
+## Context Load
+
+2. Read `LEARN/{PROJECT}/GOAL.md`
+3. Read `LEARN/{PROJECT}/PhaseMap.md` — target phase section
+4. Read `LEARN/{PROJECT}/StructureMap.md` — DataService specs for this phase
+5. Read `LEARN/{PROJECT}/handTyped(latest)/` — ground truth coding style
+6. Read completed phase folders in `LEARN/{PROJECT}/` — established patterns
+7. Read all original source files from `MAIN-SOURCE/{PROJECT}/` for this phase (every file in PhaseMap + any unlisted)
+8. Read `LEARN/{PROJECT}/phase-All/` — shared FREE infra
+
+## Build
+
+9. Create `LEARN/{PROJECT}/phase-{PHASE}/Scripts/0-Core/GameEvents.cs` — partial class
+10. Create `LEARN/{PROJECT}/phase-{PHASE}/Scripts/2-Data/Enums/GlobalEnums{PHASE}.cs` — camelCase values
+11. For each system: create `_-Systems/XxxSystem/` with all scripts + `Dependency.md` + `Test.md`
+    - [AddComponentMenu], comprehensive summaries, `// →` markers, `// purpose:` on Raise/Subscribe
+    - SO_ = pure data, [SerializeField] = private `_` prefix, interfaces owned by caller or implementor
+12. Create `4-Utils/` + `5-Tests/` (including `Manual/*.md` with 10 pitfall rules)
+
+## Documentation
+
+13. Create `GUIDE.md` — beginner-friendly (What It Looks Like, folder tree, typing order, scene setup, tests, cross-phase mods with code diffs, source vs phase diff, systems & testability)
+14. Create `FLOW.md` — system map, data flows (conversation prose), event registry, portability diagram
+15. Update `LEARN/{PROJECT}/phase-All/7-3D/MODEL.md`, `ANIM.md`, `WORLD.md` with `## Phase {PHASE}` sections
+
+## Verify
+
+16. Run `/audit-phase` on this phase
+17. Run `/decouple-check` on each system
+18. Run `/cross-phase-mod` for this phase
+19. Append entry to `LEARN/{PROJECT}/surfer.md`
+
+<!-- ==== FILE: .windsurf/workflows/cross-phase-mod.md ==== -->
+---
+description: Check if new phase references methods/fields missing from earlier phases
+---
+
+## Setup
+
+1. Ask: "Which project?" → `{PROJECT}`. Ask: "Which phase?" → `{PHASE}`
+
+## Scan
+
+2. Read all `.cs` in `LEARN/{PROJECT}/phase-{PHASE}/`
+3. Extract all calls/field accesses on types from EARLIER phases
+4. For each: read the actual earlier phase file in `LEARN/{PROJECT}/phase-{earlier}/`
+5. Flag any method/field/enum that doesn't exist yet
+
+## Generate
+
+6. Output: `| Earlier Phase File | What to Add | Why | Breaking? |`
+7. For each: exact code diff with `// ← ADD` markers
+
+## Update
+
+8. Add to `LEARN/{PROJECT}/phase-{PHASE}/GUIDE.md` → "Modifications to Earlier Phases" section
+
+<!-- ==== FILE: .windsurf/workflows/decouple-check.md ==== -->
+---
+description: Scan a system for concrete cross-system deps — the #1 rework cause
+---
+
+## Setup
+
+1. Ask: "Which project?" → `{PROJECT}`. Ask: "Which system folder?" (or "all in phase X")
+
+## Scan
+
+2. For every `.cs` in the target `_-Systems/XxxSystem/`:
+   - List `using` statements
+   - Grep `Singleton<X>.Ins` (skip FREE: UIManager, DataManager)
+   - Grep `GetComponent<ConcreteClass>()` (should be `<IInterface>()`)
+   - Grep direct class refs from other `_-Systems/` folders
+   - Grep `FindObjectOfType`
+   - Check GameEvents signatures for concrete types
+
+## Classify
+
+3. Per dependency:
+   - **FREE** (GameEvents, Singleton<T>, UIManager, DataManager, Utils.*, GlobalEnumsX, phase-All/) → OK
+   - **Interface dep** (only imports an interface .cs) → OK, portable
+   - **Concrete dep** (imports class from another system) → ❌ MUST FIX
+
+## Fix
+
+4. Per concrete dep, suggest:
+   - New interface (caller-defines or implementor-defines)
+   - GameEvent (fire-and-forget)
+   - Bridge script (1-3 method runtime context, lives on game-specific side)
+   - Static accessor (display-only queries)
+
+## Report
+
+5. `# SystemName — L{n} ✅/❌` with deps table
+
+<!-- ==== FILE: .windsurf/workflows/init.md ==== -->
+---
+description: Analyse a raw source project and bootstrap all architecture docs from scratch
+---
+
+## Setup
+
+1. Ask: "Which project?" → sets `{PROJECT}` (e.g., `project-a`)
+2. Verify `MAIN-SOURCE/{PROJECT}/` exists and contains source scripts
+3. Create `LEARN/{PROJECT}/` folder structure if it doesn't exist
+
+## Source Analysis
+
+4. Scan `MAIN-SOURCE/{PROJECT}/` for all script folders — identify which contains actual game code vs engine/third-party DLLs
+   - Unity: typically `Scripts/Assembly-CSharp/` or `Assets/Scripts/`
+   - Look for: largest files, most-imported files, singleton patterns, MonoBehaviours, ScriptableObjects
+5. Read the 10 largest files first — these are usually god-objects that reveal the dependency graph
+6. Read all remaining game scripts — count total files, map inheritance chains, identify singletons, list all FindObjectOfType calls
+7. Map every script-to-script dependency: who imports who, who calls who, who subscribes to whose events
+
+## Generate ARCHITECTURE.md
+
+8. Create `LEARN/{PROJECT}/ARCHITECTURE.md` with:
+   - **Source Overview** — total file count, folder structure, engine version
+   - **Dependency Graph** — which scripts depend on which (grouped by domain)
+   - **God Objects** — files >200 lines doing 3+ things (split candidates)
+   - **Singleton Registry** — every singleton, what it owns, who reads it
+   - **Coupling Hotspots** — FindObjectOfType calls, direct cross-domain references, static instance access
+   - **Event System** — existing event patterns (UnityEvent, C# Action, custom)
+   - **Data Flow** — how data moves: SO → runtime wrapper → manager → UI
+   - **Inheritance Chains** — class hierarchies worth preserving vs flattening
+   - **External Packages** — third-party assets/plugins identified from DLLs and namespaces
+
+## Generate PhaseMap.md
+
+9. Group all source scripts into logical phases by dependency order:
+   - Phase = set of scripts that can be built and tested independently
+   - Rule: each phase depends only on earlier phases, never forward
+   - For each phase: file list, "What It Looks Like When Running", difficulty rating, weight %
+10. Create `LEARN/{PROJECT}/PhaseMap.md` with all phases + cross-phase modification tables
+
+## Generate StructureMap.md
+
+11. For each phase, spec the internal structure:
+    - Which scripts become `_-Systems/` folders (3+ tightly coupled files)
+    - DataService candidates (pure C# logic extractable from MonoBehaviours)
+    - Interface candidates (cross-system communication points)
+    - SO_ / Field_ / W prefix assignments
+12. Create `LEARN/{PROJECT}/StructureMap.md`
+
+## Generate GOAL.md
+
+13. Copy the proven architecture rules from the general template (folder structure, naming, class responsibilities, decoupling patterns, lifecycle, C# features, testing strategy)
+14. Customize with project-specific details:
+    - Project name replaces `[PROJECT_NAME]`
+    - Actual phase names/counts
+    - Project-specific SPACE_UTIL or utility extensions (if any in source)
+    - Project-specific enums, tags, layers found in source
+15. Create `LEARN/{PROJECT}/GOAL.md`
+
+## Generate NewAgent.md
+
+16. Create `LEARN/{PROJECT}/NewAgent.md` — phase-agnostic agent instructions referencing:
+    - `LEARN/{PROJECT}/GOAL.md`
+    - `LEARN/{PROJECT}/PhaseMap.md`
+    - `LEARN/{PROJECT}/StructureMap.md`
+    - `LEARN/{PROJECT}/handTyped(latest)/`
+    - `MAIN-SOURCE/{PROJECT}/` for original source
+
+## Generate Supporting Docs
+
+17. Create `LEARN/{PROJECT}/Estimate.md` — hours per phase based on file count × complexity tier
+18. Create `LEARN/{PROJECT}/SystemPortabilityMap.md` — initial L0/L1+ classification per system
+19. Create `LEARN/{PROJECT}/surfer.md` — first entry: "Prompt 1: Initial source analysis"
+
+## Verify
+
+20. Output summary: total scripts found, phases planned, systems identified, estimated hours
+
