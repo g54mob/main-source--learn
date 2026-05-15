@@ -1,3 +1,98 @@
+<!-- ==== FILE: .windsurf/Manual.md ==== -->
+# Windsurf Workflows — Usage Guide
+
+## How to Trigger
+
+In the Cascade chat panel, type `/` followed by the workflow name:
+
+```
+/init
+/build-phase
+/audit-phase
+/decouple-check
+/cross-phase-mod
+```
+
+A dropdown appears as you type. Select the workflow → Cascade reads the `.md` file and executes steps in order.
+
+---
+
+## Workflow Reference
+
+| Command | When to Use | What It Does |
+|---------|------------|--------------|
+| `/init` | Once per new project | Reads ALL `.cs` in Assembly-CSharp + `.stub` file, generates ARCHITECTURE.md, GOAL.md, PhaseMap.md, StructureMap.md, Estimate.md, SystemPortabilityMap.md, surfer.md |
+| `/build-phase` | Every new phase | Reads all reference docs + original source, generates all scripts + GUIDE.md + FLOW.md + Dependency.md per system, then auto-runs audit/decouple/cross-phase checks |
+| `/audit-phase` | After any delivery | Method-by-method comparison against original source + architecture rule violations scan + doc consistency check |
+| `/decouple-check` | After modifying any system | Scans a `_-Systems/` folder for concrete cross-system imports, classifies as FREE/interface/concrete, suggests fixes |
+| `/cross-phase-mod` | Before typing a new phase | Checks if the new phase references methods/fields that don't exist in earlier phases yet, generates exact code diffs |
+
+---
+
+## Typical Flow
+
+```
+New project:
+  /init  →  generates all docs from raw source
+
+Per phase:
+  /build-phase      →  generates everything for one phase
+    ├── /audit-phase       (auto-runs as step 16)
+    ├── /decouple-check    (auto-runs as step 17)
+    └── /cross-phase-mod   (auto-runs as step 18)
+
+Ad-hoc:
+  /decouple-check   →  after editing any system
+  /audit-phase      →  after any manual changes
+  /cross-phase-mod  →  before hand-typing a new phase
+```
+
+---
+
+## Expected Folder Structure
+
+```
+ROOT/
+├── .windsurf/
+│   ├── Manual.md              ← this file (user reference, NOT a workflow)
+│   └── workflows/
+│       ├── init.md            ← /init
+│       ├── build-phase.md     ← /build-phase
+│       ├── audit-phase.md     ← /audit-phase
+│       ├── decouple-check.md  ← /decouple-check
+│       └── cross-phase-mod.md ← /cross-phase-mod
+├── MAIN-SOURCE/
+│   ├── project-0/             ← raw source (read-only)
+│   ├── entire-project-0.stub  ← full hierarchy including excluded assets
+│   ├── project-1/
+│   └── entire-project-1.stub
+└── LEARN/
+    ├── project-0/             ← generated docs + phases
+    │   ├── ARCHITECTURE.md
+    │   ├── GOAL.md
+    │   ├── PhaseMap.md
+    │   ├── StructureMap.md
+    │   ├── Estimate.md
+    │   ├── SystemPortabilityMap.md
+    │   ├── surfer.md
+    │   ├── phase-All/
+    │   ├── phase-a/
+    │   └── ...
+    └── project-1/
+```
+
+---
+
+## Key Facts
+
+- **Only files in `.windsurf/workflows/` become slash commands** — anything else in `.windsurf/` is just regular files
+- **Workflows persist across conversations** — they're `.md` files on disk, not chat memory
+- **Edit anytime** — changes to workflow `.md` files take effect on next invocation
+- **`// turbo` annotation** — add above a step to auto-run safe terminal commands without approval
+- **Cascade asks clarifying questions** — workflows with `{PROJECT}` or `{PHASE}` placeholders prompt you for values
+- **Each workflow is standalone** — `/decouple-check` works independently, doesn't require `/build-phase` first
+- **`/build-phase` chains the others** — steps 16-18 run audit, decouple, and cross-phase checks automatically
+
 <!-- ==== FILE: .windsurf/workflows/audit-phase.md ==== -->
 ---
 description: Post-delivery self-audit — method-by-method source comparison + architecture rule check
@@ -150,22 +245,25 @@ description: Analyse a raw source project and bootstrap all architecture docs fr
 
 ## Setup
 
-1. Ask: "Which project?" → sets `{PROJECT}` (e.g., `project-a`)
+1. Ask: "Which project?" → sets `{PROJECT}` (e.g., `project-0`)
 2. Verify `MAIN-SOURCE/{PROJECT}/` exists and contains source scripts
-3. Create `LEARN/{PROJECT}/` folder structure if it doesn't exist
+3. Read `MAIN-SOURCE/entire-{PROJECT}.stub` — this is the COMPLETE file hierarchy of the original project including assets excluded due to size. Use it to understand the full project scope (3D models, audio, prefabs, scenes, etc.) even if those files aren't physically present.
+4. Create `LEARN/{PROJECT}/` folder structure if it doesn't exist
 
 ## Source Analysis
 
-4. Scan `MAIN-SOURCE/{PROJECT}/` for all script folders — identify which contains actual game code vs engine/third-party DLLs
-   - Unity: typically `Scripts/Assembly-CSharp/` or `Assets/Scripts/`
-   - Look for: largest files, most-imported files, singleton patterns, MonoBehaviours, ScriptableObjects
-5. Read the 10 largest files first — these are usually god-objects that reveal the dependency graph
-6. Read all remaining game scripts — count total files, map inheritance chains, identify singletons, list all FindObjectOfType calls
-7. Map every script-to-script dependency: who imports who, who calls who, who subscribes to whose events
+5. Cross-reference the `.stub` hierarchy against `MAIN-SOURCE/{PROJECT}/` — identify:
+   - Which folders are asset-only (listed in .stub but not present — 3D, audio, textures, scenes)
+   - Which contains engine/third-party DLLs (skip these)
+6. Read **every single `.cs` file** in `MAIN-SOURCE/{PROJECT}/Scripts/Assembly-CSharp/` (or equivalent game code folder). This is the actual game source — read ALL of them, no skipping.
+   - Start with the 10 largest files (god-objects that reveal the dependency graph)
+   - Then read every remaining `.cs` file
+7. For each file read, extract: class name, base class, interfaces implemented, singletons, [SerializeField] fields, public methods, FindObjectOfType calls, event subscriptions/raises, direct references to other classes
+8. Map the full dependency graph: who imports who, who calls who, who subscribes to whose events. Count total files.
 
 ## Generate ARCHITECTURE.md
 
-8. Create `LEARN/{PROJECT}/ARCHITECTURE.md` with:
+9. Create `LEARN/{PROJECT}/ARCHITECTURE.md` with:
    - **Source Overview** — total file count, folder structure, engine version
    - **Dependency Graph** — which scripts depend on which (grouped by domain)
    - **God Objects** — files >200 lines doing 3+ things (split candidates)
@@ -175,42 +273,34 @@ description: Analyse a raw source project and bootstrap all architecture docs fr
    - **Data Flow** — how data moves: SO → runtime wrapper → manager → UI
    - **Inheritance Chains** — class hierarchies worth preserving vs flattening
    - **External Packages** — third-party assets/plugins identified from DLLs and namespaces
+   - **Asset Inventory** (from .stub) — 3D models, audio clips, prefabs, scenes, materials, shaders listed in the stub but not physically present. Gives complete picture of what the project uses beyond code.
 
 ## Generate PhaseMap.md
 
-9. Group all source scripts into logical phases by dependency order:
+10. Group all source scripts into logical phases by dependency order:
    - Phase = set of scripts that can be built and tested independently
    - Rule: each phase depends only on earlier phases, never forward
    - For each phase: file list, "What It Looks Like When Running", difficulty rating, weight %
-10. Create `LEARN/{PROJECT}/PhaseMap.md` with all phases + cross-phase modification tables
+11. Create `LEARN/{PROJECT}/PhaseMap.md` with all phases + cross-phase modification tables
 
 ## Generate StructureMap.md
 
-11. For each phase, spec the internal structure:
+12. For each phase, spec the internal structure:
     - Which scripts become `_-Systems/` folders (3+ tightly coupled files)
     - DataService candidates (pure C# logic extractable from MonoBehaviours)
     - Interface candidates (cross-system communication points)
     - SO_ / Field_ / W prefix assignments
-12. Create `LEARN/{PROJECT}/StructureMap.md`
+13. Create `LEARN/{PROJECT}/StructureMap.md`
 
 ## Generate GOAL.md
 
-13. Copy the proven architecture rules from the general template (folder structure, naming, class responsibilities, decoupling patterns, lifecycle, C# features, testing strategy)
-14. Customize with project-specific details:
+14. Copy the proven architecture rules from the general template (folder structure, naming, class responsibilities, decoupling patterns, lifecycle, C# features, testing strategy)
+15. Customize with project-specific details:
     - Project name replaces `[PROJECT_NAME]`
     - Actual phase names/counts
     - Project-specific SPACE_UTIL or utility extensions (if any in source)
     - Project-specific enums, tags, layers found in source
-15. Create `LEARN/{PROJECT}/GOAL.md`
-
-## Generate NewAgent.md
-
-16. Create `LEARN/{PROJECT}/NewAgent.md` — phase-agnostic agent instructions referencing:
-    - `LEARN/{PROJECT}/GOAL.md`
-    - `LEARN/{PROJECT}/PhaseMap.md`
-    - `LEARN/{PROJECT}/StructureMap.md`
-    - `LEARN/{PROJECT}/handTyped(latest)/`
-    - `MAIN-SOURCE/{PROJECT}/` for original source
+16. Create `LEARN/{PROJECT}/GOAL.md`
 
 ## Generate Supporting Docs
 
@@ -220,5 +310,5 @@ description: Analyse a raw source project and bootstrap all architecture docs fr
 
 ## Verify
 
-20. Output summary: total scripts found, phases planned, systems identified, estimated hours
+20. Output summary: total scripts found (code), total assets found (from .stub), phases planned, systems identified, estimated hours
 
