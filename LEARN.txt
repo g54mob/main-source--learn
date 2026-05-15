@@ -1,0 +1,2514 @@
+<!-- ==== FILE: LEARN/npcfr/ARCHITECTURE.md ==== -->
+# ARCHITECTURE — npcfr
+
+## Source Overview
+
+| Metric | Value |
+|--------|-------|
+| **Project** | npcfr (NPC Factory / People-Playground-style sandbox) |
+| **Engine** | Unity 6+ (URP), C#, IL2CPP build |
+| **Source Origin** | ILSpy decompilation from `Assembly-CSharp.dll` |
+| **Obfuscation** | Heavy — most class/method names are 2–3 letter codes |
+| **Total .cs files (game code)** | ~800+ in `Assembly-CSharp/` |
+| **Named folders** | 21 (retain original structure) |
+| **Obfuscated root files** | ~650+ (single/double-letter `.cs` files) |
+| **Total stub entries** | 9,750 files / 110.92 MB |
+| **DI Framework** | Zenject (53 `[Inject]` points, 33 Installer files) |
+
+### Folder Structure (Assembly-CSharp)
+
+```
+Assembly-CSharp/
+├── ActiveRagdoll/          (9)  — physics-based character controller & muscles
+├── Audio/                  (3)  — ambient audio, single-shot sources
+├── BloodSplatters/         (1)  — particle emitter for blood decals
+├── Components/             (9)  — reusable MonoBehaviours (particles, audio, rigidbodies)
+├── Core/                   (3)  — MeshData handler
+├── Data/                   (11) — ScriptableObjects (icons, player inventory, camera shake)
+├── Effectors/              (5)  — LVA effector system
+├── Infrastructure/         (63) — Zenject installers, scene services, project services
+│   ├── Project/            (42) — project-level DI (registrations, prefabs, SFX handlers)
+│   └── Scenes/             (21) — scene-level DI (toolbar, camera, inputs, UI, creatures)
+├── Kinemation/             (16) — recoil animation, spring systems, camera shake
+├── LVA/                    (54) — Living Virtual Agents (creatures, limbs, organs, puppeteers)
+│   ├── Core/               (2)  — enums (LVAEffectorFeedbackType)
+│   ├── Creatures/           (3)  — abstract Creature<TNode>, implementations
+│   ├── Limbs/              (23) — AbstractLimb, LimbPhysics, LimbDismemberment, variants
+│   ├── Organs/             (4)  — organ system
+│   ├── Puppeteers/         (17) — HumanoidPuppeteer, IK, bone mapping, move control
+│   └── NodesHierarchy/     (2)  — node graph
+├── Map/                    (3)  — Spinner environment objects
+├── Player/                 (33) — player controller
+│   ├── Appearances/        (11) — God mode appearance, camera, body physics
+│   ├── Cam/                (3)  — camera shake service
+│   ├── Control/            (3)  — player control logic
+│   ├── GameplayInput/      (5)  — button actions, mouse/keyboard input
+│   ├── GodInventoryItems/  (4)  — HumanSpawnerGII, Glock17GII
+│   └── Toolbar/            (5)  — toolbar model, service, populator
+├── QuickOutline/           (2)  — mesh outline effect
+├── Spawnables/             (11) — runtime-spawned objects
+│   ├── Bullets/            (3)  — PistolBullet, Shell
+│   ├── Misc/               (3)  — HumanSpawner
+│   └── Weapons/            (5)  — Glock17, muzzle particles, shell ejection
+├── Sugar/                  (1)  — syntactic sugar helpers
+├── TEST/                   (4)  — test scripts
+├── Tests/                  (5)  — unit/performance tests
+├── TripledoseLibs/         (9)  — internal library (collections, infrastructure)
+├── VFX/                    (4)  — blood drain, blood loss particles
+├── Views/                  (27) — UI layer
+│   ├── ContextMenu/        (6)  — radial/context menu
+│   ├── Generic/            (7)  — PopupWindow, base view classes
+│   ├── Hints/              (3)  — hint bar (MK variant)
+│   ├── Pause/              (5)  — pause menu
+│   └── Toolbar/            (5)  — toolbar UI slots
+├── VoxelMeshGeneration/    (15) — voxel body mesh system
+│   ├── Chunks/             (1)  — VoxelMeshChunkData
+│   ├── DataBuilding/       (3)  — VoxelMeshData builder
+│   ├── Separation/         (2)  — mesh separation (dismemberment)
+│   ├── Tools/              (3)  — morphs
+│   └── Tests/              (2)  — voxel tests
+└── [~650 obfuscated .cs files at root]
+```
+
+---
+
+## Dependency Graph
+
+### Core Hierarchy (deobfuscated role names)
+
+```
+bgb (MonoBehaviour base — unknown original name)
+ └── g  (Lifecycle managed entity — Awake/Start/Enable/Disable/Destroy events)
+      └── bcx  (Parameterized entity — parameters, behaviors, effectors, external params)
+           └── bcz<TParam, TBehavior>  (Generic creature component)
+                ├── AbstractLimb  (via bcz<zq, AbstractLimb.wv>)
+                └── [other creature parts]
+```
+
+### Domain Dependencies
+
+| From | To | Nature |
+|------|----|--------|
+| **LVA.Creatures** | `bam`, `bcx`, `vf`, `wk`, `bim`, Zenject | Creature base → entity system |
+| **LVA.Limbs** | `bcz`, `zq`, `VoxelMesh`, `SeparatedMeshData`, `LimbPhysics` | Limb → voxel body, physics |
+| **LVA.Puppeteers** | `bml`, `bmb`, `IKReferences`, `HumanoidPuppeteerStaticData` | Humanoid IK, bone mapping |
+| **VoxelMeshGeneration** | Unity.Burst, Unity.Collections, Unity.Mathematics | High-perf voxel processing |
+| **Player** | `jg` (InputActions), Zenject, Views, Spawnables | Input → toolbar → inventory → spawn |
+| **Infrastructure** | Zenject.MonoInstaller, all domain services | DI wiring |
+| **Views** | Zenject, Data SOs | UI binds via DI, reads data |
+| **Spawnables** | Zenject, LVA, VFX, Components | Weapons/bullets depend on creature system |
+| **Kinemation** | Unity.Mathematics, MonoBehaviour | Standalone recoil/spring system |
+| **ActiveRagdoll** | MonoBehaviour, Physics | Standalone physics controller |
+
+### Key Obfuscated Class Roles
+
+| Class | Lines | Role |
+|-------|-------|------|
+| `fo` | 1420 | **Utility god-class** — math, coroutines, timers, collection helpers |
+| `fp` | 336 | **Extension methods** — float/Vector/Quaternion/NativeContainer extensions |
+| `bcx` | 940 | **Entity base** — parameters, behaviors, effectors (LVA entity framework) |
+| `g` | 231 | **Lifecycle entity** — Awake/Start/OnEnable/OnDisable/OnDestroy wrapper |
+| `jg` | 381 | **Input action map** — Player + UI actions (Unity Input System) |
+| `dm` | 367 | **VoxelMesh separator** — processes voxel separation for dismemberment |
+| `yh` | 334 | **Limb damage handler** — voxel-level limb destruction logic |
+| `rd` | 371 | **IK height controller** — humanoid pose/height transitions |
+| `cn` | 198 | **Voxel flood-fill** — separation algorithms |
+| `ir` | 363 | **Perf test** — hash set benchmark MonoBehaviour |
+| `bam` | ~unknown | **Creature MonoBehaviour** — base for Creature<TNode> |
+
+---
+
+## God Objects (>200 lines, 3+ responsibilities)
+
+| File | Lines | Responsibilities |
+|------|-------|------------------|
+| `fo.cs` | 1420 | Math utils, coroutine helpers, timer system, collection ops, audio helpers, particle control, easing |
+| `bcx.cs` | 940 | Entity parameters, behavior management, effector signals, external params, lifecycle |
+| `fp.cs` | 336 | Float extensions, Vector extensions, Quaternion extensions, NativeContainer extensions, list shuffling |
+| `VoxelMesh.cs` | 561 | Voxel data, chunk management, mesh building (Burst), morph application, event dispatch |
+| `jg.cs` | 381 | Player input actions, UI input actions, control scheme management |
+| `dm.cs` | 367 | Separation coroutines, mesh data filtering, chunk coordinate tracking |
+| `yh.cs` | 334 | Damage detection, voxel weight tracking, limb separation events, physics integration |
+
+---
+
+## Singleton Registry
+
+| Location | Pattern | What It Owns |
+|----------|---------|--------------|
+| `l.cs` | `static Instance` | Unknown (single singleton in entire codebase) |
+
+**Note:** This project is remarkably singleton-free. All service access goes through Zenject `[Inject]`.
+
+---
+
+## Coupling Hotspots
+
+### FindObjectOfType
+**None found.** Clean DI architecture.
+
+### Zenject [Inject] Points (53 total)
+Heavy users:
+- **Infrastructure installers** (21 files) — scene/project wiring
+- **LVA domain** (7 files) — Creature, AbstractLimb, LimbPhysics, Puppeteers
+- **Player domain** (7 files) — Appearances, Camera, Toolbar, GodInventoryItems
+- **Spawnables** (6 files) — Glock17, PistolBullet, HumanSpawner
+- **Views** (6 files) — ContextMenu, Hints, Pause, Toolbar views
+
+### Static Instance Access
+Only 1 file (`l.cs`) uses static Instance pattern.
+
+### Cross-Domain Direct References
+- **Spawnables → LVA**: Weapons reference creature damage system
+- **Player → Spawnables**: Toolbar/GodInventory items reference spawnable prefabs
+- **Views → Player**: Toolbar views bind to toolbar service
+- **VoxelMeshGeneration → LVA.Limbs**: AbstractLimb uses SeparatedMeshData
+
+---
+
+## Event System
+
+### Patterns Used
+1. **C# `Action` / `Action<T>`** — Primary pattern (324 matches across 120 files)
+2. **`event Action<T>`** — Standard C# event accessors on entity lifecycle (`g.cs`: pcl/pcm/pcn/pco/pcp events)
+3. **No UnityEvent usage detected** in game code
+4. **No custom event bus** — direct subscription model
+
+### Key Event Chains
+- `g` entity lifecycle → `Action<g>` events (created, started, enabled, disabled, destroyed)
+- `VoxelMesh` → `Action<hz<int3, Voxel>>` voxel change events
+- `VoxelMesh` → `Action<el>` chunk update events
+- `bcx` entity → `Action sql` parameter change event
+- Limb system → separation/destruction callbacks
+
+---
+
+## Data Flow
+
+```
+ScriptableObjects (SO) → SerializedData
+    ├── SerializedIconData
+    ├── SerializedObjectDescriptor
+    ├── SerializedGodInventoryCategoryData
+    ├── SerializedGIIRegistrationData
+    ├── FPSCameraShake
+    ├── RecoilAnimData
+    └── ButtonActionData
+
+Registration Installers → Zenject Bindings
+    ├── RegistrationsInstaller (prefabs, mods)
+    ├── GodInventoryItemsRegistrationInstaller
+    ├── LVAEntitiesRegistrationInstaller
+    ├── SpawnablesRegistrationInstaller
+    └── ParticlesRegistrationInstaller
+
+Scene Installers → Runtime Services
+    ├── CoreSceneServicesInstaller
+    ├── PlayerInputsInstaller
+    ├── ButtonsActionsInstaller
+    ├── ToolbarInstaller
+    ├── CameraServiceInstaller
+    └── SandboxUIInstaller
+
+Runtime: Service → MonoBehaviour → Events
+    Player Input (jg) → Player Control → Toolbar → GodInventoryItem → Spawnable
+    Creature (bam) → Limbs (AbstractLimb) → VoxelMesh → Separation → Physics
+```
+
+---
+
+## Inheritance Chains
+
+### Entity System (preserve)
+```
+bgb → g → bcx → bcz<TParam, TBehavior> → AbstractLimb / Creature<TNode>
+```
+
+### Limb Behaviors (preserve)
+```
+bcx.bcw (abstract behavior) → AbstractLimb.wv → concrete limb behaviors (yh, vm<yi>, etc.)
+```
+
+### Installer Hierarchy (preserve)
+```
+MonoInstaller → cjj → RegistrationsInstaller, CoreSceneServicesInstaller, etc.
+```
+
+### Worth Flattening
+- `fo.cs` / `fp.cs` — utility classes should be split by domain (math, collections, audio, particles)
+- Obfuscated single-letter classes with <50 lines — many are tiny enums, structs, or delegates that can be grouped
+
+---
+
+## External Packages
+
+| Package | Source | Purpose |
+|---------|--------|---------|
+| **Zenject** | Third-party DI | Dependency injection framework |
+| **DOTween** | Third-party | Tween animations |
+| **Odin Inspector** (Sirenix) | Third-party | Editor inspector extensions |
+| **Amazing Assets — Advanced Dissolve** | Asset Store | Dissolve shader effects |
+| **Linework** | Asset Store | Outline rendering |
+| **Unified Universal Blur** | Asset Store | UI blur effects |
+| **Unity Burst** | Unity Package | High-performance compiled code |
+| **Unity Collections** | Unity Package | NativeArray, NativeHashSet, etc. |
+| **Unity Mathematics** | Unity Package | int3, float3, math functions |
+| **Unity Input System** | Unity Package | New input system |
+| **Unity Cinemachine** | Unity Package | Camera system |
+| **Unity Splines** | Unity Package | Spline tools |
+| **Unity Timeline** | Unity Package | Timeline/sequencing |
+| **Unity Visual Scripting** | Unity Package | Visual scripting (likely unused) |
+| **TextMeshPro** | Unity Package | Text rendering |
+| **GUPS.Obfuscator** | Third-party | Code obfuscation tool |
+
+---
+
+## Asset Inventory (from .stub)
+
+### Scenes
+- `Bootstrap.glb` (212 B) — entry scene
+- `Sandbox.glb` (16.4 MB) — main gameplay scene
+
+### 3D Models (Mesh/)
+- **Character**: Lynx_H1–H5, polySurface variants (humanoid body parts)
+- **Weapons**: Glock meshes (Glock1/2/3)
+- **Environment**: Combined meshes, rocks, primitives (Cube, Sphere, Cylinder, Plane)
+- **Misc**: icosahedron, pyramid, pul1/2
+
+### Prefabs (PrefabHierarchyObject/)
+- **Creatures**: HumanCreaturePrefab, HumanoidPuppeteer, HumanSpawner, HumanHologram, Enemy
+- **Body Parts**: HeadPrefab, PelvisPrefab, Spine_1Prefab, Left/RightArm/Forearm/Hand/Leg/Knee/FootPrefab
+- **Weapons**: Glock17, PistolBullet, 9mmShell
+- **VFX**: Explosion, BloodDecalsPool, BloodDrain, BloodLoss, NPCSpawn*, Viper17 muzzle/smoke/sparkles
+- **UI**: DebugUI* (30+ debug UI prefabs), ContextMenu buttons, HintSlot, Bar
+- **Infrastructure**: ProjectContext, FooInstaller, FooSubContainer (Zenject containers)
+- **Misc**: Ship, ShipBroken, Asteroid, WallBracket, AutoCamera
+
+### Audio (AudioClip/)
+- **Ambient**: space-atmosphere (4 clips), industrial-ambient, windy
+- **SFX**: footsteps (4), gore/splat (8), explosion, damage, laser, static, electricity
+- **Weapon**: Shoot9MM, Casing9MM, WeaponAimWhoosh
+- **Impact**: Bullet9MMHardSurface, RbHit, SlowMotionStart/Stop
+
+### Textures (Texture2D/)
+- **Character**: 1K_Body-NM, 1K_Body-TXTR, Lynx-H_Albedo/roughness
+- **Weapon**: Viper17Albedo, 9mmTextureAlbedo, MuzzleFlash 1/3
+- **VFX**: Smoke, SmokeB, Flame, Swirl01, SplatAlpha, Pixelblood, Large/Medium/Thin blood sets
+- **UI**: toolbar icons, spawner2, HumanHeadIcon, various rect/button textures
+- **Environment**: prototype textures, Floor, Fence, SpinnerLeg, terrain LDR tiles
+
+### Materials/Shaders
+- **Custom**: TripledosePixelShader, NoiseHologram, Tripledose_Liquid, Tripledose_Particles, VHSUI
+- **Dissolve**: Amazing Assets Advanced Dissolve (Lit, ShaderGraph)
+- **Outline**: Soft Outline, Wide Outline (Linework)
+- **Standard**: URP Lit, Unlit, Particles
+- **Physics Materials**: Default, FZeroFriction, SlidePhysicMaterial, SlipperyFloor, Spinner, TestDumper
+
+### Terrain
+- `New Terrain.glb` (11 MB) — single terrain data
+
+### Other
+- **Font**: PerfectDOSVGA437.ttf (pixel font), LiberationSans
+- **Audio Mixer**: Mixer with Master + New Group
+- **RGB Atlas**: RGBAtlas_Albedo/Emission/Metallic (voxel color palette)
+
+<!-- ==== FILE: LEARN/npcfr/Estimate.md ==== -->
+# Estimate — npcfr
+
+## Hours per Phase
+
+| # | Phase | Files | Complexity | Hours | Notes |
+|---|-------|-------|------------|-------|-------|
+| 1 | Core Utilities & Extensions | ~25 | Low | 6–8 | Split fo.cs god-object, rename all methods |
+| 2 | Data Layer (SOs & Structs) | ~20 | Low | 4–6 | Straightforward data containers, rename fields |
+| 3 | TripledoseLibs | ~9 | Low | 3–4 | Collection wrappers, preserve NativeContainer APIs |
+| 4 | VoxelMesh Engine | ~25 | High | 18–24 | Burst jobs, NativeArray math, coroutine rebuilds |
+| 5 | Entity Framework | ~80 | High | 24–32 | Deep abstract hierarchy, 80+ obfuscated files |
+| 6 | LVA Core | ~60 | High | 20–28 | Creature/Limb graph, VoxelMesh integration |
+| 7 | ActiveRagdoll & Puppeteers | ~30 | High | 14–18 | Physics, IK, bone mapping |
+| 8 | Infrastructure & DI | ~65 | Medium | 12–16 | Zenject installers, service bindings |
+| 9 | Player System | ~35 | Medium | 10–14 | Input, toolbar, appearances |
+| 10 | Spawnables & Weapons | ~15 | Medium | 6–8 | Weapon logic, spawn pipeline |
+| 11 | Views & UI | ~30 | Medium | 8–10 | UI controllers, context menu |
+| 12 | Audio, VFX & Components | ~15 | Low | 4–6 | Standalone MonoBehaviours |
+| 13 | Integration & Wiring | ~5 | Medium | 6–8 | Cross-phase testing, scene setup |
+| | **TOTAL** | **~414** | | **135–182** | |
+
+## Complexity Tiers
+
+| Tier | Multiplier | Criteria |
+|------|-----------|----------|
+| **Low** | 0.25 hr/file | Data containers, enums, simple MonoBehaviours |
+| **Medium** | 0.4 hr/file | Service logic, DI wiring, standard patterns |
+| **High** | 0.6 hr/file | Burst jobs, physics, deep abstractions, NativeContainer management |
+
+## Risk Factors
+
+- **Obfuscation overhead**: +30% time for naming reconstruction across all phases
+- **Entity framework (P5)**: Highest risk — 80+ files forming a complex abstract hierarchy. May need multiple passes.
+- **VoxelMesh (P4)**: Burst-compiled code may have edge cases not visible in decompiled stubs
+- **Cross-phase integration (P13)**: Zenject binding order and scene loading sequence
+
+<!-- ==== FILE: LEARN/npcfr/GOAL.md ==== -->
+# GOAL — npcfr
+
+## Target Architecture Rules
+
+### 1. Folder Structure
+
+```
+npcfr-reimpl/
+├── _-Systems/           ← folders containing 3+ tightly coupled scripts
+│   ├── VoxelMeshCore/
+│   ├── EntityCore/
+│   ├── LimbSystem/
+│   ├── etc.
+├── DataServices/        ← pure C# classes (no MonoBehaviour) with extractable logic
+├── Interfaces/          ← cross-system communication contracts
+├── SO_/                 ← ScriptableObject assets
+├── Field_/              ← serializable data structs
+├── W_/                  ← runtime wrappers around SO_ data
+├── Enums/
+├── Tests/
+└── [Phase folders as needed]
+```
+
+### 2. Naming Conventions
+
+| Element | Convention | Example |
+|---------|-----------|---------|
+| ScriptableObject | `SO_` prefix | `SO_IconData` |
+| Data struct | `Field_` prefix | `Field_Voxel`, `Field_SpringData` |
+| Runtime wrapper | `W_` prefix | `W_ToolbarSlot` |
+| Interface | `I_` prefix | `I_Creature`, `I_Limb` |
+| System folder | `_-Systems/[Name]/` | `_-Systems/VoxelMeshCore/` |
+| Service (pure C#) | `[Name]DataService` | `LimbDamageDataService` |
+| MonoBehaviour | PascalCase, no prefix | `VoxelMesh`, `AbstractLimb` |
+| Enum | PascalCase | `LVAEffectorFeedbackType`, `TimerTimeType` |
+
+### 3. Class Responsibilities
+
+- **MonoBehaviour**: Only Unity lifecycle + serialized references. Delegates logic to DataServices.
+- **DataService**: Pure C# class. Testable without Unity. Receives data, returns results.
+- **ScriptableObject**: Immutable configuration. Never mutated at runtime.
+- **Wrapper (W_)**: Mutable runtime copy of SO_ data. Owned by a single manager.
+- **Interface**: Defines communication contract between systems. Never concrete class references across system boundaries.
+
+### 4. Decoupling Patterns
+
+#### Cross-System Communication
+- Systems communicate **only** through interfaces
+- No direct class references across `_-Systems/` folder boundaries
+- Zenject binds interfaces to implementations in Installers
+
+#### Event Pattern
+- Use `Action` / `Action<T>` for events (matches source style)
+- Event owners declare events; subscribers inject the owning interface
+- No global event bus — direct injection only
+
+#### Dependency Direction
+- Each phase depends only on earlier phases (see PhaseMap)
+- No circular dependencies between `_-Systems/` folders
+- Utility code (P1) has zero dependencies
+
+### 5. Lifecycle Management
+
+- **Entity lifecycle** preserved: `bgb → g → bcx → bcz → concrete`
+- Virtual hooks: `cxh/cxi/cxj/cxk/cxl` (Init/Start/Enable/Disable/Destroy)
+- Behavior system: `bcw.gsu()` (Init), `bcw.gqo()` (Tick), `bcw.hls()` (Cleanup)
+- Zenject `[Inject]` for constructor injection on MonoBehaviours
+
+### 6. C# Features
+
+- **Burst-compatible structs** for VoxelMesh (Voxels, Voxel) — must remain blittable
+- **NativeArray/NativeHashSet/NativeList** for voxel operations — must manage allocation/disposal
+- **IEquatable<T>** on value types used in NativeContainers
+- **IteratorStateMachine (coroutines)** for async mesh operations
+- **Extension methods** in dedicated static classes (fp.cs pattern)
+- **Generics** on entity framework (bcz<TParam, TBehavior>)
+
+### 7. Project-Specific Details
+
+| Item | Value |
+|------|-------|
+| **Project Name** | npcfr |
+| **Phase Count** | 13 |
+| **DI Framework** | Zenject |
+| **Render Pipeline** | URP (Universal Render Pipeline) |
+| **Physics** | 3D Physics (Rigidbody, Collider, PhysicsMaterial) |
+| **Input** | Unity Input System (New) via `jg` wrapper |
+| **Custom Shaders** | TripledosePixelShader, NoiseHologram, Liquid, VHSUI |
+| **Key Plugin** | Amazing Assets Advanced Dissolve (limb separation VFX) |
+
+### 8. Tags & Layers (from source)
+
+#### Physics Materials Found
+- Default, DefaultFriction, FZeroFriction
+- SlidePhysicMaterial, SlipperyFloorPhysicMaterial
+- SpinnerPhysicMaterial, TestDumper
+
+#### SFX Type Enums
+- `ImpactSFXType` — bullet impacts, body hits, foot steps
+- `ToolsSFXType` — tool use sounds
+- `WeaponSFXType` — gun fire, casing
+- `WhooshSFXType` — weapon aim whooshes
+
+#### Input Actions (from jg.cs)
+- **Player Map**: 16 actions (move, look, fire, aim, scroll, toolbar slots, pause, etc.)
+- **UI Map**: 10 actions (navigate, submit, cancel, point, click, scroll, etc.)
+- **Control Schemes**: 5 (likely Keyboard+Mouse, Gamepad, etc.)
+
+### 9. Testing Strategy
+
+- **Unit tests** for DataServices (pure C# — no Unity dependency)
+- **Integration tests** for VoxelMesh operations (NativeContainer allocation)
+- **Performance tests** already exist (`ir.cs` — hash set benchmarks, `VoxelMeshGeneration/Tests/`)
+- **Phase validation**: each phase should compile and run independently up to its "What It Looks Like When Running" description
+- **Regression**: preserve existing test infrastructure in `TEST/` and `Tests/`
+
+### 10. Utility Extensions
+
+#### SPACE_UTIL (from fo.cs) — Split Targets
+| Category | Methods |
+|----------|---------|
+| **Math** | Approximately-equal (float, float3, Vector3), angle conversion, clamping, remapping |
+| **Quaternion** | Pitch/yaw/roll extraction, clamped rotation, flatten |
+| **Vector** | Flatten, signed angle, distance helpers |
+| **Coroutine** | Timer (lerp + callback), delay, sequential coroutine runner |
+| **Collection** | AddRange for HashSet/ICollection, NativeContainer dispose helpers |
+| **Audio** | AudioSource play/stop helpers |
+| **Particle** | ParticleSystem play/stop wrappers |
+| **Transform** | Reset local/world, destroy children |
+| **Easing** | DOTween Ease evaluation wrappers |
+| **String** | Random string generation, string manipulation |
+
+#### Extension Methods (from fp.cs) — Keep Grouped
+- Float extensions (approximately, clamp, remap, ceil, floor, sign)
+- Vector3/Vector3Int extensions (flatten, scale, approximately)
+- Quaternion extensions (flatten, pitch extraction)
+- NativeContainer extensions (dispose safety, set operations)
+- List/Collection extensions (shuffle, insert-or-replace, find-with-index)
+- Color extensions (to Vector3)
+- ParticleSystem extensions (play/stop toggle)
+
+<!-- ==== FILE: LEARN/npcfr/PhaseMap.md ==== -->
+# PhaseMap — npcfr
+
+## Phase Overview
+
+| # | Phase | Files | Depends On | Difficulty | Weight % |
+|---|-------|-------|------------|------------|----------|
+| 1 | Core Utilities & Extensions | ~25 | — | Easy | 5% |
+| 2 | Data Layer (SOs & Structs) | ~20 | P1 | Easy | 4% |
+| 3 | TripledoseLibs (Internal Library) | ~9 | P1 | Easy | 3% |
+| 4 | VoxelMesh Engine | ~25 | P1, P3 | Hard | 12% |
+| 5 | Entity Framework (g/bcx/bcz) | ~80 | P1 | Hard | 15% |
+| 6 | LVA Core (Creatures, Limbs, Organs) | ~60 | P4, P5 | Hard | 18% |
+| 7 | ActiveRagdoll & Puppeteers | ~30 | P5, P6 | Hard | 10% |
+| 8 | Infrastructure & DI | ~65 | P2, P5, P6, P7 | Medium | 10% |
+| 9 | Player System | ~35 | P5, P8 | Medium | 8% |
+| 10 | Spawnables & Weapons | ~15 | P6, P8, P9 | Medium | 5% |
+| 11 | Views & UI | ~30 | P8, P9 | Medium | 5% |
+| 12 | Audio, VFX & Components | ~15 | P1, P8 | Easy | 3% |
+| 13 | Integration & Wiring | ~5 | All | Medium | 2% |
+
+---
+
+## Phase 1 — Core Utilities & Extensions
+
+### Files
+- `fo.cs` — static utility class (math, coroutines, timers, collections, audio, particles)
+- `fp.cs` — extension methods (float, Vector, Quaternion, NativeContainer, List)
+- `cn.cs` — voxel flood-fill/separation static utilities
+- Selected small obfuscated files: math helpers, enums, delegates (~20 files)
+
+### What It Looks Like When Running
+Nothing visible — pure utility code. All other phases depend on these helpers.
+
+### Difficulty: Easy
+Straightforward static methods. Obfuscation makes naming hard but logic is simple math/collection ops.
+
+---
+
+## Phase 2 — Data Layer (SOs & Structs)
+
+### Files
+- `Data/Icons/SerializedIconData.cs`
+- `Data/Objects/SerializedObjectDescriptor.cs`
+- `Data/Player/CameraShake/FPSCameraShake.cs`
+- `Data/Player/Inventory/God/Categories/SerializedGodInventoryCategoryData.cs`
+- `Data/Player/Inventory/God/Items/SerializedGIIRegistrationData.cs`
+- `Data/CustomTypes/` (5 files)
+- `Kinemation/Recoilly/Runtime/RecoilAnimData.cs`
+- `Player/GameplayInput/ButtonsActions/ButtonActionData.cs`
+- Selected obfuscated structs/enums: `bdb`, `bda`, `bbu`, `bcm`, `bcj`, `bdd`, `bjs`, etc.
+
+### What It Looks Like When Running
+No runtime behavior — these are data containers serialized in the Inspector.
+
+### Difficulty: Easy
+ScriptableObjects and plain structs. Deobfuscation naming is the only challenge.
+
+---
+
+## Phase 3 — TripledoseLibs (Internal Library)
+
+### Files
+- `TripledoseLibs/` (9 files)
+- `TripledoseLibs/Collections/` — FastDictionary, NativeHashMapWrapper, ReadOnlyNativeHashSet
+- `TripledoseLibs/Infrastructure/Setup/ProjectServicesInstaller.cs`
+- Related obfuscated types: `ig<T>`, `hx<TKey,TValue>`, `hz<TKey,TValue>`, `em<T>`
+
+### What It Looks Like When Running
+Background data structures used by VoxelMesh and entity systems. No visible effect.
+
+### Difficulty: Easy
+Standard collection wrappers. Some use Unity.Collections Native types.
+
+---
+
+## Phase 4 — VoxelMesh Engine
+
+### Files
+- `VoxelMeshGeneration/VoxelMesh.cs` — core MonoBehaviour (Voxels struct, Voxel struct, chunk management)
+- `VoxelMeshGeneration/RGBAtlasColor.cs`
+- `VoxelMeshGeneration/VoxelFaceNormalSbyte.cs`
+- `VoxelMeshGeneration/VoxelFaceVerticesIndexes.cs`
+- `VoxelMeshGeneration/Chunks/VoxelMeshChunkData.cs`
+- `VoxelMeshGeneration/DataBuilding/` (3 files — VoxelMeshData builder)
+- `VoxelMeshGeneration/Separation/` (2 files — separation module)
+- `VoxelMeshGeneration/Tools/` (3 files — VoxelMorphData)
+- `VoxelMeshGeneration/Tests/` (2 files)
+- `dm.cs` — VoxelMesh separator coroutine handler
+- Related obfuscated: `er`, `ej`, `ek`, `el`, `cr`, `cc`, `cq`, `dq`
+
+### What It Looks Like When Running
+Voxel meshes render as chunked 3D pixel bodies. Chunks rebuild dynamically when voxels are modified (shot, cut, separated). Separation creates independent physics objects from detached voxel groups.
+
+### Difficulty: Hard
+Burst-compiled jobs, NativeArray/NativeHashSet math, coroutine-based async mesh rebuilding. Core to the entire game.
+
+---
+
+## Phase 5 — Entity Framework (g / bcx / bcz)
+
+### Files
+- `bgb` base class
+- `g.cs` — lifecycle entity (Awake/Start/OnEnable/OnDisable/OnDestroy wrapper with events)
+- `bcx.cs` — parameterized entity (nested classes: bcn, bco, bcp, bcq, bcr, bcs, bct, bcv, bcw)
+- `bcz` — generic entity component
+- Interface files: `bca`, `bcb`, `bce`, `bcf`, `bcg`, `bci`, `bch`, `bcd`
+- Parameter types: `bdb`, `bda`, `bbu`, `bcm`, `bcj`, `bdd`
+- Behavior base: `bcx.bcw`
+- ~60 additional obfuscated files forming the entity parameter/behavior/effector framework
+
+### What It Looks Like When Running
+Invisible framework. Manages entity lifecycle, parameter binding, behavior execution, and effector signal routing.
+
+### Difficulty: Hard
+Deep abstract hierarchy, heavily obfuscated. Generic type constraints, dictionary-based parameter tracking, nested class architecture.
+
+---
+
+## Phase 6 — LVA Core (Creatures, Limbs, Organs)
+
+### Files
+- `LVA/Core/LVAEffectorFeedbackType.cs`
+- `LVA/Core/` (2 files)
+- `LVA/Creatures/Creature.cs` — abstract `Creature<TNode> : bam`
+- `LVA/Creatures/Implementations/AutomaticCctvCamera.cs`
+- `LVA/Limbs/AbstractLimb.cs` — base limb with nested `wv` behavior
+- `LVA/Limbs/LimbPhysics.cs`
+- `LVA/Limbs/LimbDismembermentModule.cs`
+- `LVA/Limbs/References/LimbReferencesPrivate.cs`
+- `LVA/Limbs/Variants/` (limb implementations)
+- `LVA/Limbs/Systems/` (node systems)
+- `LVA/Organs/` (4 files)
+- `LVA/NodesHierarchy/` (2 files)
+- `LVA/DebugTools/` (2 files)
+- `LVA/TestCreatureInitializer.cs`
+- `yh.cs` — limb damage/voxel handler
+- `bam` — creature MonoBehaviour base
+- Related obfuscated: `zq`, `zf`, `zk`, `vf`, `vd`, `vm<T>`, `ug`, `rx`, `bab`, `wx`, `wy`, `xc`, `ber`
+
+### What It Looks Like When Running
+Humanoid NPCs with voxel bodies. Each body part is a limb with its own VoxelMesh. Damage removes voxels, triggers gore VFX. When enough voxels are destroyed, limbs separate as independent physics objects. Limbs have physical joints and can be dismembered.
+
+### Difficulty: Hard
+Complex creature component graph. Limb ↔ VoxelMesh ↔ Physics interaction. Multiple abstract layers.
+
+---
+
+## Phase 7 — ActiveRagdoll & Puppeteers
+
+### Files
+- `ActiveRagdoll/Scripts/PuppetMaster.cs`
+- `ActiveRagdoll/Scripts/LegacyCharacterController.cs`
+- `ActiveRagdoll/Scripts/LegacyMuscle.cs`
+- `ActiveRagdoll/Scripts/Pelvis.cs`
+- `ActiveRagdoll/Scripts/FootFrictionControl.cs`
+- `ActiveRagdoll/Scripts/PhysicalBodyPart.cs`
+- `ActiveRagdoll/Scripts/PuppetFollowCamera.cs`
+- `ActiveRagdoll/Scripts/IgnoreCollision.cs`
+- `ActiveRagdoll/Tools/TimeScaler.cs`
+- `LVA/Puppeteers/Humanoid/` (all 17 files)
+  - `HumanoidPuppeteerReferences.cs`
+  - `HumanoidPuppeteerBoneMapHandler.cs`
+  - `HumanoidPuppeteerStaticData.cs`
+  - `HumanoidMoveControl.cs`
+  - `COMTransformControl.cs`
+  - `MeshEnableManagement.cs`
+  - `HumanoidPuppeteerRuntimeData.cs`
+  - `IKReferences.cs`
+- `rd.cs` — IK height/pose controller
+- `Kinemation/` (16 files — recoil, springs, camera shake)
+- Related: `bml`, `bmb`, `HumanGroupHandler`
+
+### What It Looks Like When Running
+NPCs walk, stand, fall with active ragdoll physics. Muscles drive joints toward target poses. PuppetMaster orchestrates bone tracking. IK handles foot placement and height transitions.
+
+### Difficulty: Hard
+Physics-heavy, lots of Transform/Rigidbody manipulation, IK solving, bone mapping.
+
+---
+
+## Phase 8 — Infrastructure & DI
+
+### Files
+- `Infrastructure/Project/Installers/` (9 files)
+  - `RegistrationsInstaller.cs`
+  - `GodInventoryItemsRegistrationInstaller.cs`
+  - `LVAEntitiesRegistrationInstaller.cs`
+  - `SpawnablesRegistrationInstaller.cs`
+  - `ParticlesRegistrationInstaller.cs`
+  - SFX type enums (Impact, Tools, Weapon, Whoosh)
+- `Infrastructure/Project/Registration/` (30 files)
+  - `PrefabsRegistration.cs`
+  - `AudioRegistrationInstaller.cs`
+  - `UIRegistrationInstaller.cs`
+- `Infrastructure/Project/Services/` (3 files — LoadingCurtain)
+- `Infrastructure/Scenes/` (21 files)
+  - `CoreSceneServicesInstaller.cs`
+  - `ButtonsActionsInstaller.cs`
+  - `CameraServiceInstaller.cs`
+  - `PlayerInputsInstaller.cs`
+  - `ToolbarInstaller.cs`
+  - `MKButtonsActionsInstaller.cs`
+  - `PlayerAppearanceInstaller.cs`
+  - `ParticlesInstaller.cs`
+  - Material converters (Dissolve, Liquid, LitOpaque, LitTransparent)
+  - `Sandbox/Installers/` (scene-specific DI)
+  - `Sandbox/Services/` (creatures, UI context menu)
+
+### What It Looks Like When Running
+Bootstrap scene loads → ProjectContext installs project-wide services → Sandbox scene loads → Scene installers wire creature services, UI, input. Loading curtain shows between scenes.
+
+### Difficulty: Medium
+Zenject wiring. Requires understanding of all services being bound.
+
+---
+
+## Phase 9 — Player System
+
+### Files
+- `Player/Control/` (3 files)
+- `Player/GameplayInput/` (5 files — jg InputActions, ButtonActions, MKButtonActionData)
+- `Player/GeneralInput/` (2 files)
+- `Player/Appearances/God/` (11 files)
+  - `GodPlayerAppearance.cs`
+  - `GAReferences.cs`, `GACameraHandler.cs`, `GABodyPhysics.cs`
+  - `Toolbar/GAToolbarReferences.cs`, `GAItemSwitchEffectController.cs`
+- `Player/Cam/PlayerCameraShakeService.cs` (3 files)
+- `Player/Toolbar/` (5 files)
+  - `ConcreteToolbarService.cs`
+  - `GodToolbarService.cs`
+  - `GodToolbarItemsPopulator.cs`
+  - `ToolbarModelSlotData.cs`
+- `Player/GodInventoryItems/` (4 files)
+  - `HumanSpawnerGII.cs`
+  - `Glock17GodInventoryItem.cs`
+- `jg.cs` — Input action wrapper
+
+### What It Looks Like When Running
+First-person god-mode player. Free camera, toolbar at bottom with inventory items (human spawner, gun). Click to use active item. Camera shake on actions. Mouse/keyboard input mapped through Unity Input System.
+
+### Difficulty: Medium
+Input → action → toolbar → item pipeline. Zenject-injected services.
+
+---
+
+## Phase 10 — Spawnables & Weapons
+
+### Files
+- `Spawnables/Bullets/PistolBullet.cs`
+- `Spawnables/Bullets/Shell.cs`
+- `Spawnables/Misc/HumanSpawner.cs`
+- `Spawnables/Weapons/Glock17.cs`
+- `Spawnables/Weapons/Glock17MuzzleParticlesPipeline.cs`
+- `Spawnables/Weapons/GunSlowSparklesController.cs`
+- `Spawnables/Weapons/ShellsEjectionController.cs`
+- Related obfuscated weapon behavior files
+
+### What It Looks Like When Running
+Player fires Glock17 → muzzle flash + smoke particles → bullet spawns with physics → bullet hits creature → voxel damage → blood VFX → shell casing ejects with physics.
+
+Human spawner throws → spawn VFX → humanoid NPC appears with full ragdoll body.
+
+### Difficulty: Medium
+Particle systems, physics raycasts, Zenject factory injection.
+
+---
+
+## Phase 11 — Views & UI
+
+### Files
+- `Views/Generic/PopupWindow.cs` + 6 more generic view classes
+- `Views/ContextMenu/ContextMenuWindow.cs` + 5 more
+- `Views/Hints/HintBarViewController.cs`, `MKHintBarViewController.cs`
+- `Views/Pause/PauseViewController.cs` + 4 more
+- `Views/Toolbar/ToolbarViewController.cs`, `ToolbarItemSlotView.cs`, `ToolbarItemHintView.cs`
+- `Views/ReloadCurtain.cs`
+
+### What It Looks Like When Running
+Toolbar UI at bottom showing inventory slots with icons. Context menu on right-click for creature manipulation. Hint bar shows controls. Pause menu with settings. Loading curtain between scenes.
+
+### Difficulty: Medium
+Standard Unity UI with Zenject injection. Some custom window/popup architecture.
+
+---
+
+## Phase 12 — Audio, VFX & Components
+
+### Files
+- `Audio/StrangeSoundPlayer.cs`, `SingleShotAudioSource.cs`, `PlayerYPosAudio.cs`
+- `VFX/Blood/BloodDrainParticle.cs` + 3 more
+- `BloodSplatters/Scripts/ParticleEmitter.cs`
+- `Components/Audio/LerpSound.cs`
+- `Components/Particles/ParticlesGroupMono.cs` + 4 more
+- `Components/Rigidbodies/` (1 file)
+- `Components/Etc/RandomActivator.cs`
+- `Components/Animations/` (1 file)
+- `Map/Spinner.cs`, `SpinnerPlayerEventsProcessor.cs`
+- `QuickOutline/` (2 files)
+- `Infrastructure/Scenes/Audio/AudioTimeScaleService.cs`
+
+### What It Looks Like When Running
+Ambient space atmosphere audio. Footstep sounds. Gore splat SFX on impacts. Blood particle trails from wounds. Muzzle flash particles. Spinner environment hazards.
+
+### Difficulty: Easy
+Standalone MonoBehaviours with straightforward audio/particle logic.
+
+---
+
+## Phase 13 — Integration & Wiring
+
+### Files
+- `EditorPlaymodeControl.cs`
+- `Sugar/` (1 file)
+- `TEST/` (4 files)
+- `Tests/` (5 files)
+- Scene bootstrap configuration
+- Final cross-phase integration testing
+
+### What It Looks Like When Running
+Full game: Bootstrap → Loading → Sandbox scene with terrain, NPC spawning, weapon use, voxel destruction, ragdoll physics, UI.
+
+### Difficulty: Medium
+Final wiring and testing across all phases.
+
+---
+
+## Cross-Phase Modification Table
+
+| Phase | Modifies Earlier Phase | Nature |
+|-------|----------------------|--------|
+| P4 (VoxelMesh) | P3 (TripledoseLibs) | Uses ReadOnlyNativeHashSet, NativeHashMapWrapper |
+| P5 (Entity) | P1 (Utils) | Entity lifecycle calls utility methods |
+| P6 (LVA) | P4, P5 | Limbs own VoxelMesh instances, extend entity framework |
+| P7 (Ragdoll) | P6 | Puppeteers reference limb/creature types |
+| P8 (Infra) | P2, P5–P7 | Installers bind all domain types into Zenject |
+| P9 (Player) | P8 | Player services injected via scene installers |
+| P10 (Spawnables) | P6, P8, P9 | Weapons interact with creature damage via DI |
+| P11 (Views) | P8, P9 | UI binds to toolbar/input services |
+| P12 (Audio/VFX) | P8 | Audio services registered in DI |
+| P13 (Integration) | All | Wiring verification |
+
+<!-- ==== FILE: LEARN/npcfr/StructureMap.md ==== -->
+# StructureMap — npcfr
+
+## Naming Conventions
+
+| Prefix | Meaning |
+|--------|---------|
+| `SO_` | ScriptableObject asset |
+| `Field_` | Serializable data struct (no logic) |
+| `W_` | Wrapper / runtime-mutable container around SO_ data |
+| `I_` | Interface for cross-system communication |
+| `_-Systems/` | Folder containing 3+ tightly coupled scripts |
+
+---
+
+## Phase 1 — Core Utilities & Extensions
+
+### Structure
+```
+Phase01_CoreUtils/
+├── SPACE_UTIL.cs              ← fo.cs (split from god-object)
+│   Static math, coroutine, timer, easing helpers
+├── SPACE_UTIL_Ext.cs          ← fp.cs
+│   Extension methods (float, Vector, Quaternion, NativeContainer)
+├── VoxelGridUtils.cs          ← cn.cs
+│   Voxel flood-fill and separation static algorithms
+└── Enums/
+    ├── TimerTimeType.cs       ← from fo.cs nested enum
+    └── [~15 small enum/delegate files from obfuscated root]
+```
+
+### DataService Candidates
+- `fo.cs` → `MathService` (pure static, no extraction needed — just split)
+- `fp.cs` → stays as extension methods class
+
+### Interface Candidates
+None — utility layer has no cross-system communication.
+
+---
+
+## Phase 2 — Data Layer
+
+### Structure
+```
+Phase02_Data/
+├── SO_IconData.cs                     ← SerializedIconData
+├── SO_ObjectDescriptor.cs             ← SerializedObjectDescriptor
+├── SO_GodInventoryCategory.cs         ← SerializedGodInventoryCategoryData
+├── SO_GIIRegistration.cs              ← SerializedGIIRegistrationData
+├── SO_FPSCameraShake.cs               ← FPSCameraShake
+├── SO_RecoilAnimData.cs               ← RecoilAnimData
+├── SO_ButtonActionData.cs             ← ButtonActionData
+├── Field_MKButtonActionData.cs        ← MKButtonActionData
+├── Field_ToolbarModelSlotData.cs      ← ToolbarModelSlotData
+└── CustomTypes/
+    └── [5 files from Data/CustomTypes/]
+```
+
+### Interface Candidates
+None — pure data.
+
+---
+
+## Phase 3 — TripledoseLibs
+
+### Structure
+```
+Phase03_TripledoseLibs/
+├── Collections/
+│   ├── FastDictionary.cs
+│   ├── NativeHashMapWrapper.cs
+│   ├── ReadOnlyNativeHashSet.cs
+│   └── [related obfuscated: ig<T>, hx<K,V>, hz<K,V>, em<T>]
+└── Infrastructure/
+    └── ProjectServicesInstaller.cs
+```
+
+### DataService Candidates
+All collection types are already pure C# — no extraction needed.
+
+---
+
+## Phase 4 — VoxelMesh Engine
+
+### Structure
+```
+Phase04_VoxelMesh/
+├── _-Systems/
+│   └── VoxelMeshCore/               ← 3+ tightly coupled
+│       ├── VoxelMesh.cs              ← VoxelMesh MonoBehaviour
+│       ├── VoxelMeshData.cs          ← DataBuilding
+│       ├── Field_Voxel.cs            ← VoxelMesh.Voxel struct
+│       ├── Field_Voxels.cs           ← VoxelMesh.Voxels struct (Burst)
+│       └── RGBAtlasColor.cs
+├── _-Systems/
+│   └── VoxelChunks/                  ← 3+ tightly coupled
+│       ├── Field_VoxelMeshChunkData.cs
+│       ├── ChunkRenderer.cs          ← ej (obfuscated)
+│       └── ChunkBuilder.cs           ← er (obfuscated)
+├── _-Systems/
+│   └── VoxelSeparation/              ← 3+ tightly coupled
+│       ├── VoxelMeshSeparationModule.cs
+│       ├── Field_SeparatedMeshData.cs
+│       └── VoxelSeparator.cs         ← dm.cs
+├── Tools/
+│   ├── Field_VoxelMorphData.cs
+│   └── VoxelFaceNormalSbyte.cs
+│   └── VoxelFaceVerticesIndexes.cs
+└── Tests/
+```
+
+### DataService Candidates
+- `cn.cs` (VoxelGridUtils) → already static, stays in P1
+- Separation logic in `dm.cs` → `VoxelSeparationDataService` (pure C# coroutine logic extractable from MonoBehaviour)
+
+### Interface Candidates
+- `I_VoxelMeshEvents` — VoxelMesh change/chunk events (currently raw Action delegates)
+- `I_VoxelSeparationCallback` — separation completion callback
+
+---
+
+## Phase 5 — Entity Framework
+
+### Structure
+```
+Phase05_EntityFramework/
+├── _-Systems/
+│   └── EntityCore/                   ← 5+ tightly coupled
+│       ├── EntityBase.cs             ← bgb
+│       ├── ManagedEntity.cs          ← g.cs (lifecycle)
+│       ├── ParameterizedEntity.cs    ← bcx.cs
+│       ├── GenericEntityComponent.cs ← bcz<T,B>
+│       └── I_EntityLifecycle.cs      ← events from g.cs
+├── _-Systems/
+│   └── EntityParameters/             ← 4+ tightly coupled
+│       ├── ParameterRegistry.cs      ← bcx.bcr
+│       ├── ParameterBinding.cs       ← bcx.bcp
+│       ├── ExternalParameters.cs     ← bcx.bcs
+│       └── I_ParameterAccess.cs      ← bcb, bcg, bce interfaces
+├── _-Systems/
+│   └── EntityBehaviors/              ← 3+ tightly coupled
+│       ├── BehaviorManager.cs        ← bcx.bcv
+│       ├── AbstractBehavior.cs       ← bcx.bcw
+│       └── I_BehaviorAccess.cs       ← bca, bci, bch interfaces
+├── Effectors/
+│   └── [5 files from Effectors/]
+├── Types/
+│   ├── Field_ParameterKey.cs         ← bbu
+│   ├── Field_ParameterValue.cs       ← bcm
+│   ├── Field_ParameterDef.cs         ← bdb, bda
+│   └── [~30 small type files]
+└── Signals/
+    ├── EntityActivationLock.cs       ← bcx.bcn
+    └── EffectorSignalHelper.cs       ← bcx.bco
+```
+
+### DataService Candidates
+- Parameter resolution logic (bcx.bcp methods) → `ParameterResolutionService` (pure C#)
+- External parameter tracking (bcx.bcs) → `ExternalParameterService` (pure C#)
+
+### Interface Candidates
+- `I_EntityLifecycle` — created/started/enabled/disabled/destroyed events
+- `I_ParameterAccess` — read-only parameter query (bcb/bcg)
+- `I_ParameterBinding` — read-write parameter binding (bcf)
+- `I_BehaviorAccess` — behavior query (bca/bci)
+- `I_BehaviorControl` — behavior enable/disable (bch)
+
+---
+
+## Phase 6 — LVA Core
+
+### Structure
+```
+Phase06_LVA/
+├── _-Systems/
+│   └── CreatureCore/                 ← 4+ tightly coupled
+│       ├── CreatureBase.cs           ← bam
+│       ├── Creature.cs              ← Creature<TNode>
+│       ├── AutomaticCctvCamera.cs
+│       └── TestCreatureInitializer.cs
+├── _-Systems/
+│   └── LimbSystem/                   ← 10+ tightly coupled
+│       ├── AbstractLimb.cs
+│       ├── AbstractLimbBehavior.cs   ← AbstractLimb.wv
+│       ├── LimbPhysics.cs
+│       ├── LimbDismembermentModule.cs
+│       ├── LimbReferencesPrivate.cs
+│       ├── LimbDamageHandler.cs      ← yh.cs
+│       └── Variants/
+│           ├── TestPiska.cs
+│           └── [other limb variant files]
+├── _-Systems/
+│   └── OrganSystem/                  ← 4 files
+│       └── [4 organ files]
+├── NodesHierarchy/
+│   └── [2 files]
+├── DebugTools/
+│   ├── CreatureDebugMenu.cs
+│   └── TestLimbDetacher.cs
+└── Types/
+    ├── LVAEffectorFeedbackType.cs
+    └── HumanoidLimbHoldGroupType.cs  ← from AbstractLimb
+```
+
+### DataService Candidates
+- `yh.cs` damage calculation logic → `LimbDamageDataService` (voxel weight calculation is pure math)
+- Dismemberment decision logic → `DismembermentRuleService`
+
+### Interface Candidates
+- `I_Creature` — creature lifecycle, node access
+- `I_Limb` — limb state query (VoxelMesh, physics, damage)
+- `I_LimbDamage` — damage application
+- `I_Dismemberment` — dismemberment trigger/callback
+
+---
+
+## Phase 7 — ActiveRagdoll & Puppeteers
+
+### Structure
+```
+Phase07_Ragdoll/
+├── _-Systems/
+│   └── ActiveRagdoll/                ← 9 files tightly coupled
+│       ├── PuppetMaster.cs
+│       ├── LegacyCharacterController.cs
+│       ├── LegacyMuscle.cs
+│       ├── Pelvis.cs
+│       ├── PhysicalBodyPart.cs
+│       ├── FootFrictionControl.cs
+│       ├── PuppetFollowCamera.cs
+│       ├── IgnoreCollision.cs
+│       └── TimeScaler.cs
+├── _-Systems/
+│   └── HumanoidPuppeteer/           ← 17+ files
+│       ├── HumanoidPuppeteerReferences.cs
+│       ├── HumanoidPuppeteerBoneMapHandler.cs
+│       ├── HumanoidPuppeteerStaticData.cs
+│       ├── HumanoidPuppeteerRuntimeData.cs
+│       ├── HumanoidMoveControl.cs
+│       ├── COMTransformControl.cs
+│       ├── MeshEnableManagement.cs
+│       ├── IKReferences.cs
+│       ├── IKHeightController.cs     ← rd.cs
+│       └── HumanGroupHandler.cs
+├── _-Systems/
+│   └── Kinemation/                   ← 16 files
+│       ├── CoreAnimComponent.cs
+│       ├── SpringCameraShake.cs
+│       ├── AnimState.cs
+│       ├── Field_RecoilAnimData.cs   ← (SO, lives in P2)
+│       ├── Field_SpringData.cs
+│       └── Field_VectorSpringData.cs
+```
+
+### DataService Candidates
+- `rd.cs` IK height calculations → `IKHeightDataService` (pure math)
+- Muscle force calculations → `MuscleForceService`
+
+### Interface Candidates
+- `I_Puppeteer` — puppeteer state, enable/disable
+- `I_RagdollControl` — ragdoll activation, muscle strength
+
+---
+
+## Phase 8 — Infrastructure & DI
+
+### Structure
+```
+Phase08_Infrastructure/
+├── Project/
+│   ├── Installers/
+│   │   ├── RegistrationsInstaller.cs
+│   │   ├── GodInventoryItemsRegistrationInstaller.cs
+│   │   ├── LVAEntitiesRegistrationInstaller.cs
+│   │   ├── SpawnablesRegistrationInstaller.cs
+│   │   ├── ParticlesRegistrationInstaller.cs
+│   │   └── SFXTypes/ (Impact, Tools, Weapon, Whoosh enums)
+│   ├── Registration/
+│   │   ├── PrefabsRegistration.cs
+│   │   ├── AudioRegistrationInstaller.cs
+│   │   ├── UIRegistrationInstaller.cs
+│   │   └── [27 more registration files]
+│   └── Services/
+│       └── Curtain/ (LoadingCurtain, LoadingCurtainService)
+├── Scenes/
+│   ├── CoreSceneServicesInstaller.cs
+│   ├── PlayerInputsInstaller.cs
+│   ├── ButtonsActionsInstaller.cs
+│   ├── MKButtonsActionsInstaller.cs
+│   ├── CameraServiceInstaller.cs
+│   ├── ToolbarInstaller.cs
+│   ├── PlayerAppearanceInstaller.cs
+│   ├── ParticlesInstaller.cs
+│   ├── MaterialConverters/ (Dissolve, Liquid, LitOpaque, LitTransparent)
+│   ├── Audio/AudioTimeScaleService.cs
+│   └── Sandbox/
+│       ├── Installers/ (SandboxUIInstaller, etc.)
+│       └── Services/ (Creatures, UI/ContextMenu)
+```
+
+### DataService Candidates
+None — installers are pure DI wiring, no extractable logic.
+
+### Interface Candidates
+- `I_LoadingCurtain` — show/hide loading curtain
+- `I_MaterialConverter` — dissolve/liquid/opaque conversion
+
+---
+
+## Phase 9 — Player System
+
+### Structure
+```
+Phase09_Player/
+├── _-Systems/
+│   └── PlayerInput/                  ← 7 tightly coupled
+│       ├── InputActionMap.cs         ← jg.cs
+│       ├── I_PlayerActions.cs        ← jg.je interface
+│       ├── I_UIActions.cs            ← jg.jf interface
+│       ├── ButtonActionsService.cs
+│       └── MKButtonActions.cs
+├── _-Systems/
+│   └── PlayerAppearance/             ← 11 tightly coupled
+│       ├── GodPlayerAppearance.cs
+│       ├── GAReferences.cs
+│       ├── GACameraHandler.cs
+│       ├── GABodyPhysics.cs
+│       └── Toolbar/ (GAToolbarReferences, GAItemSwitchEffectController)
+├── _-Systems/
+│   └── Toolbar/                      ← 5 tightly coupled
+│       ├── ConcreteToolbarService.cs
+│       ├── GodToolbarService.cs
+│       ├── GodToolbarItemsPopulator.cs
+│       └── Field_ToolbarModelSlotData.cs (in P2)
+├── Camera/
+│   └── PlayerCameraShakeService.cs
+├── GodInventoryItems/
+│   ├── HumanSpawnerGII.cs
+│   └── Glock17GodInventoryItem.cs
+└── Control/
+    └── [3 files]
+```
+
+### DataService Candidates
+- Toolbar slot management → `ToolbarDataService` (slot selection, ordering logic)
+
+### Interface Candidates
+- `I_PlayerInput` — input state query
+- `I_Toolbar` — active item, slot management
+- `I_GodInventoryItem` — use/activate/deactivate
+
+---
+
+## Phase 10 — Spawnables & Weapons
+
+### Structure
+```
+Phase10_Spawnables/
+├── _-Systems/
+│   └── Glock17System/                ← 5 tightly coupled
+│       ├── Glock17.cs
+│       ├── Glock17MuzzleParticlesPipeline.cs
+│       ├── GunSlowSparklesController.cs
+│       ├── ShellsEjectionController.cs
+│       └── PistolBullet.cs
+├── Bullets/
+│   └── Shell.cs
+└── Misc/
+    └── HumanSpawner.cs
+```
+
+### Interface Candidates
+- `I_Weapon` — fire, aim, reload
+- `I_Spawnable` — spawn/despawn lifecycle
+
+---
+
+## Phase 11 — Views & UI
+
+### Structure
+```
+Phase11_Views/
+├── _-Systems/
+│   └── ContextMenu/                  ← 6 tightly coupled
+│       ├── ContextMenuWindow.cs
+│       ├── ContextMenuSlider.cs
+│       └── [button types]
+├── _-Systems/
+│   └── ToolbarUI/                    ← 5 tightly coupled
+│       ├── ToolbarViewController.cs
+│       ├── ToolbarItemSlotView.cs
+│       └── ToolbarItemHintView.cs
+├── Generic/
+│   └── PopupWindow.cs + 6 more
+├── Hints/
+│   ├── HintBarViewController.cs
+│   └── MKHintBarViewController.cs
+├── Pause/
+│   └── PauseViewController.cs + 4 more
+└── ReloadCurtain.cs
+```
+
+### Interface Candidates
+- `I_PopupWindow` — generic popup show/hide
+- `I_ContextMenu` — context menu open/close/populate
+
+---
+
+## Phase 12 — Audio, VFX & Components
+
+### Structure
+```
+Phase12_AudioVFX/
+├── Audio/
+│   ├── StrangeSoundPlayer.cs
+│   ├── SingleShotAudioSource.cs
+│   └── PlayerYPosAudio.cs
+├── VFX/
+│   └── Blood/ (BloodDrainParticle + 3 more)
+├── BloodSplatters/
+│   └── ParticleEmitter.cs
+├── Components/
+│   ├── Audio/LerpSound.cs
+│   ├── Particles/ (ParticlesGroupMono + 4 more)
+│   ├── Rigidbodies/ (1 file)
+│   ├── Etc/RandomActivator.cs
+│   └── Animations/ (1 file)
+├── Map/
+│   ├── Spinner.cs
+│   └── SpinnerPlayerEventsProcessor.cs
+└── QuickOutline/ (2 files)
+```
+
+### No systems needed — all standalone MonoBehaviours.
+
+<!-- ==== FILE: LEARN/npcfr/SystemPortabilityMap.md ==== -->
+# SystemPortabilityMap — npcfr
+
+## Portability Classification
+
+### L0 — Self-Contained (can be copied as-is into new project)
+
+| System | Files | Dependencies | Notes |
+|--------|-------|--------------|-------|
+| Core Math Utils (fo.cs split) | ~10 | Unity.Mathematics, DOTween | Pure static, no scene references |
+| Extension Methods (fp.cs) | 1 | Unity.Collections, Unity.Mathematics | Pure extensions |
+| TripledoseLibs/Collections | ~5 | Unity.Collections | NativeContainer wrappers |
+| RGBAtlasColor | 1 | None | Simple color struct |
+| VoxelFace types | 2 | None | Simple structs |
+| QuickOutline | 2 | None | Standalone mesh outline |
+| TimeScaler | 1 | None | Time.timeScale wrapper |
+| Data SOs (all 7) | 7 | None | Pure ScriptableObjects |
+| Kinemation/Recoilly | ~16 | Unity.Mathematics | Standalone spring/recoil system |
+| SingleShotAudioSource | 1 | None | Simple audio helper |
+| LerpSound | 1 | None | Audio fade component |
+| RandomActivator | 1 | None | Random enable/disable |
+| ParticlesGroupMono | ~5 | None | Particle system controller |
+
+### L1+ — Requires Adaptation (has cross-system deps)
+
+| System | Files | Key Dependencies | Adaptation Needed |
+|--------|-------|-----------------|-------------------|
+| VoxelMesh Engine | ~25 | TripledoseLibs, Burst, RGBAtlas | Extract chunk builder interface |
+| VoxelSeparation | ~5 | VoxelMesh, NativeContainers | Tight coupling to VoxelMesh.Voxels |
+| Entity Framework (g/bcx/bcz) | ~80 | Zenject, custom types | Core framework — must be rebuilt or fully ported |
+| LVA Creatures | ~10 | Entity Framework, Zenject | Depends on full entity system |
+| LVA Limbs | ~25 | VoxelMesh, Entity Framework, Physics | Cross-cuts VoxelMesh + Entity |
+| LVA Puppeteers | ~17 | Limbs, Physics, IK | Deep integration with bone hierarchy |
+| ActiveRagdoll | ~9 | Physics, PuppetMaster | Cross-references between muscle/pelvis/controller |
+| Infrastructure/DI | ~65 | Zenject, all domain types | Project-specific wiring |
+| Player System | ~35 | Input System, Zenject, Views | Input → Toolbar → Inventory pipeline |
+| Spawnables | ~15 | Zenject, LVA, VFX | Factory-pattern spawning |
+| Views/UI | ~30 | Zenject, Player services | UI binds to services |
+| Audio services | ~5 | Zenject | Service layer over AudioSource |
+| Blood VFX | ~5 | Zenject, Physics | Particle + decal system |
+| Map/Spinner | ~3 | Physics, Player events | Environment hazard |
+
+## Portability Summary
+
+| Level | Systems | Files | % of Codebase |
+|-------|---------|-------|---------------|
+| **L0** (self-contained) | 13 | ~53 | ~13% |
+| **L1+** (needs adaptation) | 14 | ~361 | ~87% |
+
+The high L1+ ratio is expected for a tightly integrated game codebase using Zenject DI throughout.
+
+<!-- ==== FILE: LEARN/npcfr/surfer.md ==== -->
+# surfer — npcfr
+
+## Prompt 1: Initial Source Analysis
+
+**Date**: 2025-05-16
+**Action**: Full `/init` workflow
+
+### What Was Done
+1. Identified project `npcfr` in `MAIN-SOURCE/`
+2. Read `entire-npcfr.stub` (9,750 files / 110.92 MB) for full asset inventory
+3. Explored `Scripts/Assembly-CSharp/` folder (1094 items, ~800+ .cs files)
+4. Read the 10 largest files by size to identify god-objects and framework classes
+5. Scanned all named subfolders (21 domain folders with original naming)
+6. Searched for architectural patterns:
+   - 169 MonoBehaviour classes
+   - 53 [Inject] usage points (Zenject DI)
+   - 7 ScriptableObject classes
+   - 33 Installer files
+   - 324 Action/event matches across 120 files
+   - 1 singleton (l.cs)
+   - 0 FindObjectOfType calls
+7. Read key domain files: Creature, AbstractLimb, VoxelMesh, entity framework (g, bcx)
+8. Mapped dependency graph and inheritance chains
+
+### Documents Generated
+- `ARCHITECTURE.md` — full architecture analysis
+- `PhaseMap.md` — 13 phases with dependency ordering
+- `StructureMap.md` — per-phase internal structure with systems/interfaces/DataServices
+- `GOAL.md` — target architecture rules and conventions
+- `Estimate.md` — hours per phase (135–182 total)
+- `SystemPortabilityMap.md` — L0/L1+ classification
+- `surfer.md` — this file
+
+### Key Findings
+- **Heavily obfuscated** decompiled codebase (GUPS.Obfuscator)
+- **Clean DI architecture** — Zenject throughout, no FindObjectOfType, 1 singleton
+- **Core mechanic**: Voxel-based destructible humanoid NPCs with ragdoll physics
+- **Entity framework**: Deep abstract hierarchy (`bgb → g → bcx → bcz → concrete`)
+- **VoxelMesh**: Burst-compiled voxel body system with runtime separation (dismemberment)
+- **13 phases** identified with clear dependency ordering
+- **God objects** to split: `fo.cs` (1420 lines), `bcx.cs` (940 lines)
+
+<!-- ==== FILE: LEARN/wrngfloor/ARCHITECTURE.md ==== -->
+# ARCHITECTURE — wrngfloor
+
+## Source Overview
+
+| Metric | Value |
+|---|---|
+| **Project** | Wrong Floor (wrngfloor) — first-person horror game |
+| **Engine** | Unity (HDRP pipeline) |
+| **C# Language** | 7.3 (netstandard2.0) |
+| **Total Game Scripts** | 44 `.cs` files in `Assembly-CSharp/` |
+| **Skippable Scripts** | 4 (saU.cs, shitok.cs — empty; Readme.cs — SO; Properties/AssemblyInfo.cs — metadata) |
+| **Third-Party Scripts** | 2 (Jemeza/SFASFX/SoundPlayer.cs, UnityTemplateProjects/SimpleCameraController.cs) |
+| **Actionable Game Scripts** | 38 |
+| **Total Project Files** | 11,211 (from .stub) |
+| **Total Project Size** | 765.65 MB |
+| **Scene** | 1 main scene (174 MB — `Assets/SceneHierarchyObject/2.glb`) |
+| **DLL Assemblies** | 94 (engine + framework, in `Assemblies/`) |
+| **Framework Script Folders** | 3 (Mono.Security/, System/, netstandard/ — all skipped) |
+
+### Folder Structure (Scripts/Assembly-CSharp/)
+```
+Assembly-CSharp/
+├── Assembly-CSharp.csproj
+├── Properties/AssemblyInfo.cs          (metadata — skip)
+├── Jemeza/SFASFX/SoundPlayer.cs        (third-party SFX player)
+├── UnityTemplateProjects/SimpleCameraController.cs  (Unity template — skip)
+├── pl.cs           cam.cs          fl.cs           dver.cs
+├── lift.cs         liftkn.cs       menu.cs         hide.cs
+├── wfcode.cs       wfcode1.cs      wfzap.cs        wfkill.cs
+├── wfscare1.cs     wfscare2.cs     wfscare2v2.cs   wfsatr.cs
+├── wfcolis.cs      wfdver1.cs      wfpodsk.cs      wfplavn.cs
+├── wftryaska.cs    Wftpscam.cs     mirror.cs       nm.cs
+├── vkl.cs          vklt.cs         lampa.cs        key.cs
+├── klych.cs        sound.cs        tr.cs           lookat.cs
+├── addforcescr.cs  audpitch.cs     trigscare.cs    tryaska.cs
+├── golova.cs       kadr25.cs       f.cs            f2.cs
+├── veter.cs        opt.cs          opttrig.cs      saU.cs
+└── shitok.cs       Readme.cs
+```
+
+---
+
+## Dependency Graph
+
+### Core Layer (depended on by most scripts)
+```
+pl ← cam, fl, hide, menu, wfcode, wfzap, wfkill, wfscare1, wfscare2, wfscare2v2,
+     mirror, audpitch, wfplavn, Wftpscam, wfcode1, opt, veter, golova, key, wfpodsk
+```
+
+### Interaction Layer
+```
+cam → dver (SendMessage), vkl (GetComponent), any named component (GetComponent by name)
+fl  → pl (sens, MY, MX)
+```
+
+### Door/Switch Layer
+```
+dver     ← cam, wfcode, wfcode1, key, trigscare, mirror
+vkl      ← cam, trigscare, tr
+vklt     (standalone switch, no script deps)
+lampa    (standalone, bone rotation)
+```
+
+### Elevator Layer
+```
+lift   ← liftkn
+lift   → pl, cam, tryaska
+liftkn → lift
+```
+
+### Horror Event Layer
+```
+wfkill    → pl, fl, nm (NavMeshAgent)
+wfscare1  → pl, cam
+wfscare2  → pl, cam, lampa
+wfscare2v2→ pl, fl
+wfcode    → pl, fl, dver
+wfcode1   → pl, dver
+wfzap     → pl, fl
+trigscare → vkl, cam
+addforcescr → cam (Camera)
+nm        (standalone NavMesh agent)
+hide      → pl, cam
+golova    → pl, lookat
+```
+
+### Utility Layer
+```
+lookat     (standalone)
+tryaska    → fl
+wftryaska  (standalone shake)
+mirror     → pl, dver, fl
+opt        (standalone room culling)
+opttrig    → opt
+audpitch   → pl
+veter      → pl (Transform)
+kadr25     (standalone camera swap)
+Wftpscam   → pl
+wfplavn    → pl (one-shot destroy)
+```
+
+### Full Adjacency (who → depends on whom)
+| Script | Direct Script Dependencies |
+|---|---|
+| `pl` | — (root) |
+| `cam` | `dver`, `vkl` (runtime GetComponent) |
+| `fl` | `pl` |
+| `dver` | — |
+| `vkl` | — |
+| `vklt` | — |
+| `lift` | `pl`, `cam`, `tryaska` |
+| `liftkn` | `lift` |
+| `menu` | `pl` |
+| `hide` | `pl`, `cam` |
+| `mirror` | `pl (Animator)`, `dver`, `fl` |
+| `wfcode` | `pl`, `fl`, `dver` |
+| `wfcode1` | `pl`, `dver` |
+| `wfzap` | `pl`, `fl` |
+| `wfkill` | `pl`, `fl`, `nm` |
+| `wfscare1` | `pl` |
+| `wfscare2` | `pl`, `lampa` |
+| `wfscare2v2` | `pl`, `fl` |
+| `trigscare` | `vkl`, `cam` |
+| `addforcescr` | — (uses Camera directly) |
+| `golova` | `pl`, `lookat` |
+| `key` | `pl`, `dver` |
+| `nm` | — |
+| `opt` | — |
+| `opttrig` | `opt` |
+| `tryaska` | `fl` (GameObject ref) |
+| `lookat` | — |
+| `klych` | — |
+| `sound` | — |
+| `tr` | `vkl` |
+| `lampa` | — |
+| `audpitch` | — (uses Transform) |
+| `veter` | — (uses Transform) |
+| `wfplavn` | `pl` |
+| `wfpodsk` | — |
+| `wfsatr` | — |
+| `wfcolis` | — |
+| `wfdver1` | — |
+| `wftryaska` | — |
+| `Wftpscam` | `pl` |
+| `kadr25` | — |
+| `f` | `fl` (Light) |
+| `f2` | `fl` (Light) |
+
+---
+
+## God Objects
+
+No file exceeds 200 lines. Largest files doing 2+ things:
+
+| File | Lines | Responsibilities | Verdict |
+|---|---|---|---|
+| `lift.cs` | ~200 | Elevator movement, door animation, audio, lighting, NPC reveal, floor transitions (state machine x=0..23) | **Split candidate** — state machine + door anim + audio should separate |
+| `pl.cs` | ~120 | Player movement, mouse look, running, FOV zoom, footstep audio, camera bob animation | **Split candidate** — movement vs camera vs audio |
+| `menu.cs` | ~100 | Pause, settings (sensitivity/audio/language), cursor lock, camera toggle | Minor — typical menu |
+| `hide.cs` | ~95 | Player hiding, camera transitions, input during hide, exit coroutine | Acceptable |
+| `wfcode.cs` | ~100 | Combination lock input, cylinder rotation, door unlock, camera transition | Acceptable |
+
+---
+
+## Singleton Registry
+
+**No formal singletons exist.** All scripts communicate via serialized `public GameObject` references assigned in the Inspector. There are no `static Instance` fields, no `DontDestroyOnLoad`, no service locators.
+
+---
+
+## Coupling Hotspots
+
+### 1. `cam.cs` — Universal Dispatcher via SendMessage + Name-based GetComponent
+```csharp
+gameObject.GetComponent(gameObject.name).SendMessage("use");
+```
+This looks up a component **by the GameObject's name** and calls `use()` via SendMessage. Every interactable object must have its script name match its GameObject name. Extremely fragile.
+
+### 2. Direct cross-domain references everywhere
+- `lift.cs` directly reads `pl.GetComponent<pl>().cam.GetComponent<tryaska>()` — three levels deep
+- `hide.cs` reads `pl.GetComponent<pl>().cam`, `.camm`, `.MX`, `.MY`, `.MZ`
+- `wfscare1.cs` writes to `pl.GetComponent<pl>().MX` and `pl.GetComponent<pl>().MY`
+- `trigscare.cs` calls `v.GetComponent<vkl>().use()` and `c.GetComponent<cam>().dist`
+
+### 3. Uncached GetComponent calls in Update
+Almost every script calls `GetComponent<>()` inside `Update()` or `FixedUpdate()` rather than caching in `Start()`. Examples:
+- `dver.cs`: `base.gameObject.GetComponent<AudioSource>()` — called 8+ times per frame
+- `cam.cs`: `GetComponent<vkl>()`, `GetComponent<dver>()` per raycast
+
+### 4. Tag-based string comparisons
+- `"Player"` tag checked in: cam, addforcescr, trigscare, wfscare1, wfcolis, wfsatr, opttrig, wfkill
+- `"slomokno"` tag in cam
+- `"wflook"` tag in wfscare2
+
+### 5. `.active` property (deprecated)
+Multiple scripts use `.active` instead of `.activeSelf`:
+- `fl.active` in wfcode, wfzap
+- `aud.active` in wfcode1
+- `p.active` in wfcolis
+
+---
+
+## Event System
+
+**None.** The project uses zero events — no `UnityEvent`, no `System.Action`, no `delegate`, no custom event bus.
+
+All communication patterns:
+1. **Direct reference + method call**: `l.a()` (liftkn → lift)
+2. **SendMessage**: `gameObject.SendMessage("use")` (cam → any interactable)
+3. **Direct field read/write**: `pl.GetComponent<pl>().MX = -90f` (wfscare1 → pl)
+4. **Coroutine chains**: `StartCoroutine(end())` for delayed sequences
+
+---
+
+## Data Flow
+
+```
+Inspector-assigned references (public GameObject fields)
+         │
+         ▼
+   MonoBehaviour.Update()
+         │
+         ├── Player input → pl (movement/look) → Rigidbody.AddForce
+         │
+         ├── cam raycast → SendMessage("use") → target script.use()
+         │
+         ├── Trigger/Collision → OnTriggerEnter → direct calls
+         │
+         └── State integers (x, on, a) → drive sequential logic
+```
+
+- **No ScriptableObjects** for runtime data
+- **No data containers** — all state is in-field on MonoBehaviours
+- **No save/load system**
+- **State machines** use raw `int` fields (e.g., `lift.x`, `wfcode1.on`, `wfscare2.a`)
+
+---
+
+## Inheritance Chains
+
+**Flat hierarchy.** Every script directly extends `MonoBehaviour`. No custom base classes, no interfaces, no abstract classes.
+
+| Class | Base |
+|---|---|
+| All 38 game scripts | `MonoBehaviour` |
+| `Readme` | `ScriptableObject` |
+| `SimpleCameraController` | `MonoBehaviour` (Unity template) |
+
+---
+
+## External Packages
+
+| Package/Plugin | Evidence |
+|---|---|
+| **Unity HDRP** | `Unity.RenderPipelines.HighDefinition.Runtime.dll`, HDRP shaders in Assets, `Volume` component usage in lift.cs |
+| **TextMeshPro** | `Unity.TextMeshPro.dll` |
+| **Timeline** | `Unity.Timeline.dll` |
+| **VFX Graph** | `Unity.VisualEffectGraph.Runtime.dll` |
+| **Jemeza SFASFX** | `Jemeza/SFASFX/SoundPlayer.cs` — third-party sound effect player |
+| **NavMesh** | `UnityEngine.AIModule.dll` — used by nm.cs, wfkill.cs |
+
+---
+
+## Asset Inventory (from .stub)
+
+### Audio Clips (~60 files, ~90 MB)
+Ambient loops, door sounds, footsteps, scares, elevator SFX, heartbeat, breath, siren, dog bark, wind, code beeps. Mix of `.wav` and `.ogg`. Many Russian-named files (dver = door, shagi = footsteps, zvyk = sound, ysilenie = amplification).
+
+### 3D Meshes (~130+ files, `.glb`)
+Characters (body, head, eyes, jaw, clothes), furniture (cabinet, stool, shelf, bowl), doors (multiple types including SCP-432 themed), elevator parts, pipes, fire extinguisher, flashlight, tools (crowbar, wrench, axe, hammer, saw), props (cola can, cement bag, radio, bottles), architectural elements. Russian-named meshes present (Дверь = door, Шкаф = cabinet, Куб = cube).
+
+### Textures (~200+ files, `.png`/`.tga`, ~300+ MB)
+Albedo, normal, roughness maps for all mesh assets. UI textures (buttons, sliders, toggles). Horror textures (blood, gore, body parts). Game-specific (wanted poster — rozisk, warning signs, panel textures). Largest textures are character body/clothing normals (~6-10 MB each).
+
+### Shaders (~80 files)
+Primarily HDRP built-in shaders. HDRP Lit, Decal, deferred tile shading, atmospheric scattering, temporal AA, sky shaders. No custom shaders identified.
+
+### Scenes
+Single main scene: `Assets/SceneHierarchyObject/2.glb` (174.77 MB) — entire game in one scene.
+
+### UI Assets
+Font: "Perfect DOS VGA 437" (retro CRT aesthetic). Standard Unity UI sprites. Custom button/toggle skins (GUISkin-style).
+
+### Materials & Config
+Audio mixers (2), PhysicMaterial (1), NavMesh data, InputManager (legacy input), HDRP quality/graphics settings, PlayerSettings (26.9 KB — full build config).
+
+<!-- ==== FILE: LEARN/wrngfloor/Estimate.md ==== -->
+# Estimate — wrngfloor
+
+## Complexity Tiers
+
+| Tier | Description | Hours/File |
+|---|---|---|
+| **T1 — Rename** | Rename file, rename class, add `[SerializeField]`, cache GetComponent. No logic change. | 0.25 h |
+| **T2 — Reshape** | Extract interface, adopt `IInteractable`, replace SendMessage, add SO config. Minor logic restructure. | 0.5 h |
+| **T3 — Refactor** | Split god-object, extract DataService, replace state int with enum, reparent systems. | 1.0 h |
+| **T4 — Rewrite** | Major restructure — new state machine, event system, multiple file splits. | 1.5–2.0 h |
+
+---
+
+## Per-Phase Estimates
+
+### Phase 1 — Player Core (5 files)
+
+| File | Tier | Hours | Notes |
+|---|---|---|---|
+| `pl.cs` | T4 | 2.0 | Split into PlayerController + PlayerLook + W_PlayerFootsteps. Extract PlayerInputService. Create SO_PlayerConfig. |
+| `cam.cs` | T3 | 1.0 | Replace SendMessage + name-based GetComponent with IInteractable interface. Create SO_InteractionConfig. |
+| `fl.cs` | T2 | 0.5 | Rename, cache components, adopt interface for flashlight toggle. |
+| `tryaska.cs` | T1 | 0.25 | Rename to CameraShake, add [SerializeField]. |
+| `lookat.cs` | T1 | 0.25 | Rename to LookAtTarget. |
+
+**Phase 1 Total: 4.0 hours** (5 files)
+
+### Phase 2 — Doors & Switches (9 files)
+
+| File | Tier | Hours | Notes |
+|---|---|---|---|
+| `dver.cs` | T3 | 1.0 | Implement IInteractable, create SO_DoorConfig, cache AudioSource. Heavy angle math preserved. |
+| `vkl.cs` | T2 | 0.5 | Implement IInteractable, create SO_LightSwitchConfig. |
+| `vklt.cs` | T1 | 0.25 | Rename, implement IInteractable. |
+| `lampa.cs` | T1 | 0.25 | Rename, implement IInteractable. |
+| `key.cs` | T2 | 0.5 | Rename, implement IInteractable, reference IDoor. |
+| `klych.cs` | T1 | 0.25 | Rename to ObjectToggle, implement IInteractable. |
+| `sound.cs` | T1 | 0.25 | Rename to SoundTrigger, implement IInteractable. |
+| `tr.cs` | T1 | 0.25 | Rename to ConditionalActivator. |
+| `wfpodsk.cs` | T1 | 0.25 | Rename to HintPopup, implement IInteractable. |
+
+**Phase 2 Total: 3.5 hours** (9 files)
+
+### Phase 3 — Elevator System (2 files)
+
+| File | Tier | Hours | Notes |
+|---|---|---|---|
+| `lift.cs` | T4 | 2.0 | Split into 3 files. Extract ElevatorStateMachine DataService with enum states. Create SO_ElevatorConfig. Replace all magic numbers. |
+| `liftkn.cs` | T1 | 0.25 | Rename to ElevatorButton, implement IInteractable. |
+
+**Phase 3 Total: 2.25 hours** (2 files)
+
+### Phase 4 — Environment & Optimization (8 files)
+
+| File | Tier | Hours | Notes |
+|---|---|---|---|
+| `opt.cs` | T1 | 0.25 | Rename to RoomCulling. |
+| `opttrig.cs` | T1 | 0.25 | Rename to RoomCullingTrigger. |
+| `mirror.cs` | T2 | 0.5 | Rename, decouple from direct pl/dver/fl references. |
+| `veter.cs` | T1 | 0.25 | Rename to WindAudioFollower. |
+| `audpitch.cs` | T1 | 0.25 | Rename to DistancePitchController. |
+| `wfplavn.cs` | T1 | 0.25 | Rename to PlayerSmoothnessOverride. |
+| `kadr25.cs` | T1 | 0.25 | Rename to FrameRateCameraSwap. |
+| `Wftpscam.cs` | T1 | 0.25 | Rename to ThirdPersonDeathCam. |
+
+**Phase 4 Total: 2.25 hours** (8 files)
+
+### Phase 5 — Horror Events & NPC (16 files)
+
+| File | Tier | Hours | Notes |
+|---|---|---|---|
+| `wfcode.cs` | T3 | 1.0 | Extract CombinationLockLogic. Create SO_CombinationLockConfig. Implement IInteractable. |
+| `wfzap.cs` | T2 | 0.5 | Rename, implement IInteractable. |
+| `hide.cs` | T3 | 1.0 | Complex camera reparenting logic. Implement IInteractable. Replace direct pl field access. |
+| `wfkill.cs` | T2 | 0.5 | Rename, decouple from pl/fl/nm. |
+| `nm.cs` | T1 | 0.25 | Rename to NPCWalker. |
+| `wfscare1.cs` | T2 | 0.5 | Replace direct pl.MX/MY writes with event. |
+| `wfscare2.cs` | T2 | 0.5 | Rename, replace direct lampa.x write. |
+| `wfscare2v2.cs` | T2 | 0.5 | Replace direct pl/fl field writes with events. |
+| `golova.cs` | T2 | 0.5 | Rename, implement IInteractable. |
+| `addforcescr.cs` | T1 | 0.25 | Rename to ScareEvent_DoorSlam. |
+| `trigscare.cs` | T2 | 0.5 | Decouple from vkl/cam direct access. |
+| `wfcode1.cs` | T2 | 0.5 | Rename, decouple from pl/dver. |
+| `f.cs` | T1 | 0.25 | Rename to FlashlightPuzzle. |
+| `f2.cs` | T1 | 0.25 | Rename to DarknessFearEffect. |
+| `wfsatr.cs` | T1 | 0.25 | Rename to TriggerActivator. |
+| `wfcolis.cs` | T1 | 0.25 | Rename to CollisionPopup. |
+
+**Phase 5 Total: 7.5 hours** (16 files)
+
+### Phase 6 — UI & Menu (1 file)
+
+| File | Tier | Hours | Notes |
+|---|---|---|---|
+| `menu.cs` | T2 | 0.5 | Rename. Bind to SO_GameSettings. Replace direct pl field writes. |
+
+**Phase 6 Total: 0.5 hours** (1 file)
+
+---
+
+## Summary
+
+| Phase | Files | Hours | Weight |
+|---|---|---|---|
+| Phase 1 — Player Core | 5 | 4.0 | 20% |
+| Phase 2 — Doors & Switches | 9 | 3.5 | 17% |
+| Phase 3 — Elevator System | 2 | 2.25 | 11% |
+| Phase 4 — Environment & Optimization | 8 | 2.25 | 11% |
+| Phase 5 — Horror Events & NPC | 16 | 7.5 | 38% |
+| Phase 6 — UI & Menu | 1 | 0.5 | 3% |
+| **TOTAL** | **41** | **20.0 h** | **100%** |
+
+### Additional Overhead
+
+| Task | Hours |
+|---|---|
+| Interface definitions (IInteractable, IDoor, IScareEvent, IPlayerState) | 1.0 |
+| ScriptableObject definitions (7 SOs) | 1.5 |
+| DataService implementations (3 services) | 1.5 |
+| Scene re-wiring (reassign references after renames) | 2.0 |
+| Testing & verification per phase | 2.0 |
+| **Overhead Total** | **8.0 h** |
+
+### Grand Total: ~28 hours
+
+<!-- ==== FILE: LEARN/wrngfloor/GOAL.md ==== -->
+# GOAL — wrngfloor
+
+## Project Identity
+
+**Wrong Floor** — A first-person horror game built in Unity (HDRP). Player explores a building, solves a combination lock, rides an elevator to the wrong floor, and encounters scripted horror events in a basement level. Single scene, 38 game scripts, ~200 lines max per file.
+
+---
+
+## Target Architecture Rules
+
+### 1. Folder Structure
+
+```
+Assets/
+├── _-PlayerSystem/
+│   ├── PlayerController.cs
+│   ├── PlayerLook.cs
+│   ├── W_PlayerFootsteps.cs
+│   ├── InteractionRaycaster.cs
+│   ├── FlashlightController.cs
+│   ├── CameraShake.cs
+│   └── LookAtTarget.cs
+├── _-DoorSystem/
+│   ├── PhysicsDoor.cs
+│   ├── AnimatedDoor.cs
+│   └── KeyPickup.cs
+├── _-ElevatorSystem/
+│   ├── ElevatorController.cs
+│   ├── ElevatorSequence_Descent.cs
+│   ├── ElevatorSequence_NPCReveal.cs
+│   └── ElevatorButton.cs
+├── _-NPCSystem/
+│   ├── NPCWalker.cs
+│   ├── NPCKillSequence.cs
+│   └── NPCScareEvent.cs
+├── _-PuzzleSystem/
+│   ├── CombinationLock.cs
+│   ├── LockInspection.cs
+│   └── HidingSpot.cs
+├── _-ScareEventSystem/
+│   ├── ScareEvent_NPCAppear.cs
+│   ├── ScareEvent_ForcedLook.cs
+│   ├── ScareEvent_DoorSlam.cs
+│   ├── ScareEvent_LightsOut.cs
+│   ├── ScareEvent_WrongFloor.cs
+│   └── SkullInspection.cs
+├── _Interfaces/
+│   ├── IInteractable.cs
+│   ├── IDoor.cs
+│   ├── IScareEvent.cs
+│   └── IPlayerState.cs
+├── _DataServices/
+│   ├── PlayerInputService.cs
+│   ├── ElevatorStateMachine.cs
+│   └── CombinationLockLogic.cs
+├── _ScriptableObjects/
+│   ├── SO_PlayerConfig.cs
+│   ├── SO_InteractionConfig.cs
+│   ├── SO_DoorConfig.cs
+│   ├── SO_LightSwitchConfig.cs
+│   ├── SO_ElevatorConfig.cs
+│   ├── SO_CombinationLockConfig.cs
+│   └── SO_GameSettings.cs
+├── _Standalone/
+│   ├── LightSwitch.cs
+│   ├── SimpleLightSwitch.cs
+│   ├── AdjustableLamp.cs
+│   ├── ObjectToggle.cs
+│   ├── SoundTrigger.cs
+│   ├── ConditionalActivator.cs
+│   ├── HintPopup.cs
+│   ├── RoomCulling.cs
+│   ├── RoomCullingTrigger.cs
+│   ├── MirrorReflection.cs
+│   ├── WindAudioFollower.cs
+│   ├── DistancePitchController.cs
+│   ├── PlayerSmoothnessOverride.cs
+│   ├── FrameRateCameraSwap.cs
+│   ├── ThirdPersonDeathCam.cs
+│   ├── FlashlightPuzzle.cs
+│   ├── DarknessFearEffect.cs
+│   ├── TriggerActivator.cs
+│   ├── CollisionPopup.cs
+│   └── WorldObjectShake.cs
+└── _UI/
+    └── PauseMenu.cs
+```
+
+### 2. Naming Conventions
+
+| Element | Convention | Example |
+|---|---|---|
+| MonoBehaviour (system) | PascalCase, descriptive | `PlayerController`, `PhysicsDoor` |
+| MonoBehaviour (wrapper) | `W_` prefix | `W_PlayerFootsteps` |
+| Interface | `I` prefix | `IInteractable`, `IDoor` |
+| ScriptableObject | `SO_` prefix | `SO_PlayerConfig` |
+| DataService | PascalCase, `Service`/`Logic`/`StateMachine` suffix | `ElevatorStateMachine` |
+| Private fields | `_camelCase` | `_moveDirection`, `_isRunning` |
+| Serialized fields | `[SerializeField] private` | `[SerializeField] private float _speed;` |
+| Public API methods | PascalCase, descriptive verbs | `Use()`, `ToggleLight()`, `Call()` |
+| Coroutines | PascalCase with descriptive name | `OpenDoorsSequence()`, `FlickerLoop()` |
+
+### 3. Class Responsibilities
+
+**MonoBehaviour scripts must do ONE thing:**
+- `PlayerController` → movement only (no camera, no audio)
+- `PlayerLook` → mouse look only
+- `InteractionRaycaster` → raycast + dispatch only
+- `FlashlightController` → flashlight hold/toggle only
+
+**No script should:**
+- Directly access another system's private state (no `pl.GetComponent<pl>().MX = -90f`)
+- Use `SendMessage()` — use `IInteractable.Use()` instead
+- Use `GetComponent(string)` by name — use typed interface
+- Call `GetComponent<>()` in `Update()` — cache in `Awake()`/`Start()`
+
+### 4. Decoupling Patterns
+
+#### Replace SendMessage with IInteractable
+```csharp
+// BEFORE (cam.cs)
+gameObject.GetComponent(gameObject.name).SendMessage("use");
+
+// AFTER (InteractionRaycaster.cs)
+if (hit.transform.TryGetComponent<IInteractable>(out var interactable))
+    interactable.Use();
+```
+
+#### Replace direct field writes with interface/events
+```csharp
+// BEFORE (wfscare1.cs)
+pl.GetComponent<pl>().MX = -90f;
+pl.GetComponent<pl>().MY = 10f;
+
+// AFTER — via event or interface
+public static event System.Action<Vector2> OnForceLookDirection;
+OnForceLookDirection?.Invoke(new Vector2(-90f, 10f));
+
+// PlayerLook subscribes
+OnForceLookDirection += (dir) => { _mx = dir.x; _my = dir.y; };
+```
+
+#### Replace state integers with enums
+```csharp
+// BEFORE (lift.cs)
+public int x; // 0, 1, 2, ... 23
+
+// AFTER
+public enum ElevatorState { Idle, Ascending, DoorsOpening, WaitingForPlayer, ... }
+private ElevatorState _state = ElevatorState.Idle;
+```
+
+#### Cache GetComponent calls
+```csharp
+// BEFORE (dver.cs) — called 8+ times per frame
+base.gameObject.GetComponent<AudioSource>().Play();
+
+// AFTER
+private AudioSource _audio;
+private void Awake() => _audio = GetComponent<AudioSource>();
+private void PlayAudio() => _audio.Play();
+```
+
+### 5. Lifecycle Rules
+
+- `Awake()` — cache components, resolve references
+- `Start()` — initialize state, subscribe to events
+- `OnDestroy()` — unsubscribe from events
+- `Update()` — input reading, state checks (no heavy logic)
+- `FixedUpdate()` — physics only (`Rigidbody.AddForce`)
+- Coroutines — sequenced events with `WaitForSeconds`
+
+### 6. C# Features to Adopt
+
+| Feature | Use Case |
+|---|---|
+| `enum` | All state machines (elevator, scare events, door states) |
+| `[SerializeField] private` | All inspector-assigned fields (replace `public GameObject`) |
+| `TryGetComponent<T>()` | Replace `GetComponent<T>() != null` checks |
+| `switch` expressions | State machine transitions |
+| `readonly` fields | Cached component references |
+| `string.Empty` / `nameof()` | Replace magic strings |
+| Properties | Replace direct field access for external reads |
+
+### 7. Tags & Layers
+
+**Existing tags (preserve):**
+- `Player` — player collider
+- `slomokno` — breakable door glass (special interaction path in cam.cs)
+- `wflook` — wrong floor look target (raycast check in wfscare2)
+
+**No custom layers identified** — only default physics LayerMasks.
+
+### 8. Testing Strategy
+
+| Level | What to Test | How |
+|---|---|---|
+| Unit | `CombinationLockLogic` — digit increment, code validation | NUnit, no MonoBehaviour needed |
+| Unit | `ElevatorStateMachine` — state transitions | NUnit, pure C# |
+| Unit | `PlayerInputService` — input → vector mapping | NUnit with mock input |
+| Integration | `IInteractable` dispatch — raycaster finds and calls correct target | PlayMode test with scene setup |
+| Integration | Door unlock flow — key pickup → door enabled | PlayMode test |
+| Manual | Full horror sequences — timing, audio, camera | Playtest checklist per phase |
+
+### 9. Performance Guidelines
+
+- **Cache all GetComponent calls** — current code calls GetComponent 30+ times per frame across all scripts
+- **Room culling** — preserve opt/opttrig system, it's the only optimization
+- **Single scene** — no scene splitting needed (project is small)
+- **AudioSource pooling** — not needed (low audio source count)
+- **No object pooling needed** — no runtime instantiation found
+
+### 10. Migration Order
+
+1. **Phase 1 first** — `pl`, `cam`, `fl` are the foundation everything depends on
+2. **Create `IInteractable` interface before Phase 2** — all interactables need it
+3. **Phase 2 interactables** adopt `IInteractable` immediately
+4. **Phase 3 elevator** — extract state machine, adopt SO config
+5. **Phase 4** — straightforward renames, minimal logic changes
+6. **Phase 5** — largest phase, but scripts are mostly independent triggers
+7. **Phase 6** — menu last, bind to `SO_GameSettings`
+
+<!-- ==== FILE: LEARN/wrngfloor/PhaseMap.md ==== -->
+# PhaseMap — wrngfloor
+
+## Phase Overview
+
+| Phase | Name | Files | Weight % | Difficulty | Depends On |
+|---|---|---|---|---|---|
+| 1 | Player Core | 5 | 20% | Medium | — |
+| 2 | Doors & Switches | 9 | 20% | Low–Medium | Phase 1 |
+| 3 | Elevator System | 2 | 15% | Medium–High | Phase 1, 2 |
+| 4 | Environment & Optimization | 8 | 10% | Low | Phase 1 |
+| 5 | Horror Events & NPC | 16 | 25% | Medium | Phase 1, 2, 4 |
+| 6 | UI & Menu | 1 | 10% | Low | Phase 1 |
+
+**Total actionable scripts: 41** (38 game + 2 third-party kept + 1 Readme SO)
+
+---
+
+## Phase 1 — Player Core
+
+**What it does:** First-person player movement, mouse look, camera interaction raycast, flashlight, screen shake.
+
+### File List
+
+| File | Lines | Role |
+|---|---|---|
+| `pl.cs` | ~120 | Player movement, mouse look, running, footstep audio, camera bob, FOV zoom |
+| `cam.cs` | ~40 | Interaction raycast — dispatches `use()` via SendMessage to interactables |
+| `fl.cs` | ~85 | Flashlight hold/toggle, follows player aim with sway |
+| `tryaska.cs` | ~25 | Camera shake effect (random rotation + flicker) |
+| `lookat.cs` | ~8 | Simple LookAt utility component |
+
+### What It Looks Like When Running
+Player walks in first-person with WASD, mouse look, running with shift. Flashlight toggles with a key, sways naturally. Pressing "use" button casts a ray and interacts with whatever is hit. Camera can shake when tryaska is enabled.
+
+### Difficulty: Medium
+`pl.cs` is the most coupled script in the project — nearly everything reads its fields. `cam.cs` uses fragile name-based GetComponent dispatch. Decoupling these will require an interaction interface.
+
+---
+
+## Phase 2 — Doors & Switches
+
+**What it does:** Physics-based doors, light switches with flicker, key pickups, sound triggers, simple activators.
+
+### File List
+
+| File | Lines | Role |
+|---|---|---|
+| `dver.cs` | ~105 | Physics hinge door with audio (creak, slam, handle) |
+| `vkl.cs` | ~65 | Light switch with random flicker coroutine |
+| `vklt.cs` | ~30 | Simple light switch variant (no flicker) |
+| `lampa.cs` | ~30 | Adjustable lamp bone rotation |
+| `key.cs` | ~35 | Key pickup — unlocks a door, plays animation |
+| `klych.cs` | ~20 | Generic switch — activates/deactivates object arrays |
+| `sound.cs` | ~25 | Play audio on `use()` |
+| `tr.cs` | ~12 | Conditional activator — if vkl is on, activate target |
+| `wfpodsk.cs` | ~20 | Hint popup — shows UI element temporarily |
+
+### What It Looks Like When Running
+Doors swing open/closed with physics, creak, and slam sounds. Light switches toggle room lights with occasional flicker. Keys can be picked up to unlock specific doors. Interaction hints appear briefly.
+
+### Difficulty: Low–Medium
+Most scripts are small and self-contained. `dver.cs` has complex angle math for slam detection but is well-isolated. `vkl.cs` flicker logic uses coroutine ping-pong.
+
+---
+
+## Phase 3 — Elevator System
+
+**What it does:** Multi-floor elevator with doors, descent, lighting changes, and NPC encounter sequence.
+
+### File List
+
+| File | Lines | Role |
+|---|---|---|
+| `lift.cs` | ~200 | Elevator state machine (x=0..23): call, ascend, open doors, descend, trap player, second descent, NPC reveal, ending |
+| `liftkn.cs` | ~12 | Elevator call button — triggers `lift.a()` |
+
+### What It Looks Like When Running
+Player presses elevator button. Elevator ascends with motor sounds, doors open. Player enters, doors close. Elevator descends to basement. Doors open to new area. Later, elevator is called again (NPC riding it), descends with shake, doors open for final encounter.
+
+### Difficulty: Medium–High
+`lift.cs` is the most complex file — a 23-state sequential machine controlling position, doors, audio, lighting, NPC visibility, camera distance, and coroutines. Tightly coupled to `pl`, `cam`, `tryaska`. Primary god-object split candidate.
+
+---
+
+## Phase 4 — Environment & Optimization
+
+**What it does:** Room culling, mirror reflections, ambient audio positioning, distance-based pitch, camera effects.
+
+### File List
+
+| File | Lines | Role |
+|---|---|---|
+| `opt.cs` | ~20 | Room activation/deactivation (manual LOD) |
+| `opttrig.cs` | ~20 | Trigger zones that increment/decrement room visibility counters |
+| `mirror.cs` | ~40 | Real-time mirror — mirrors player model, door, flashlight positions |
+| `veter.cs` | ~20 | Wind audio source follows player Z position |
+| `audpitch.cs` | ~15 | Distance-based audio pitch controller |
+| `wfplavn.cs` | ~8 | One-shot: sets player smoothness value, then self-destructs |
+| `kadr25.cs` | ~15 | Frame-rate camera swap (horror low-FPS effect) |
+| `Wftpscam.cs` | ~20 | Third-person camera with wall collision raycast |
+
+### What It Looks Like When Running
+Rooms activate/deactivate as player moves between zones (performance optimization). A bathroom mirror reflects the player model and flashlight in real-time. Wind sound follows the player through corridors. Certain cameras swap at low frame rates for VHS horror effect.
+
+### Difficulty: Low
+All scripts are small and independent. `mirror.cs` has the most math (position/rotation mirroring) but is self-contained.
+
+---
+
+## Phase 5 — Horror Events & NPC
+
+**What it does:** All scripted horror sequences — scare triggers, NPC encounters, combination lock puzzle, hiding mechanic, death sequences, wrong floor event chain.
+
+### File List
+
+| File | Lines | Role |
+|---|---|---|
+| `wfcode.cs` | ~100 | Combination lock puzzle (4 cylinders, correct code: 1990) |
+| `wfcode1.cs` | ~55 | Wrong floor event sequence (audio → footsteps → door open) |
+| `wfzap.cs` | ~65 | Lock inspection interaction (camera zoom to lock) |
+| `wfkill.cs` | ~45 | NPC kill sequence (NavMesh approach → detect → death animation → game over camera) |
+| `nm.cs` | ~20 | NPC NavMesh walk to waypoint |
+| `wfscare1.cs` | ~55 | Scare event: NPC animates when player looks, forces camera direction, FOV flash |
+| `wfscare2.cs` | ~45 | Scare event: NPC appears when player passes, animates when looked at or player retreats |
+| `wfscare2v2.cs` | ~45 | Scare variant: forced look at NPC, flashlight aim, FOV snap |
+| `hide.cs` | ~95 | Player hides in furniture — camera transitions, limited look, exit sequence |
+| `golova.cs` | ~45 | Head/skull inspection — camera switches to examine, eyes track player |
+| `addforcescr.cs` | ~55 | Door slam scare — trigger enters, door slammed by force, FOV flash |
+| `trigscare.cs` | ~45 | Trigger scare — lights off via vkl, reduced interaction distance, NPC animation |
+| `f.cs` | ~35 | Flashlight puzzle — toggle light reveals hidden objects step by step |
+| `f2.cs` | ~35 | Darkness fear effects — voice when flashlight off, periodic heartbeat |
+| `wfsatr.cs` | ~18 | Trigger activator — activate/deactivate object arrays on enter |
+| `wfcolis.cs` | ~18 | Collision popup — shows message on physics collision |
+
+### What It Looks Like When Running
+The game's horror content: combination lock with code 1990 (year-themed). Scripted scares — NPCs appear, doors slam, lights go out. Player can hide in cabinets. An NPC walks toward the player and kills them. Darkness triggers fear audio. The "wrong floor" sequence plays ambient horror sounds with approaching footsteps.
+
+### Difficulty: Medium
+Many small self-contained trigger scripts. `wfcode.cs` has the most interactive logic (input handling in camera-locked mode). `wfkill.cs` combines NavMesh + raycast + death sequence. `hide.cs` has complex camera reparenting.
+
+---
+
+## Phase 6 — UI & Menu
+
+**What it does:** Pause menu, settings (sensitivity, audio, language, camera shake toggle), quit.
+
+### File List
+
+| File | Lines | Role |
+|---|---|---|
+| `menu.cs` | ~100 | Pause menu — sensitivity slider, volume slider, language toggle (RU/EN), camera shake toggle, debug cam, quit |
+
+### What It Looks Like When Running
+ESC opens pause menu overlay. Sliders control mouse sensitivity and audio volume. Toggle for camera shake. Language switch between Russian and English (swaps UI GameObjects). L key toggles debug camera. Exit button quits application.
+
+### Difficulty: Low
+Single self-contained file. Clear UI binding pattern (Slider/Toggle → public method).
+
+---
+
+## Cross-Phase Modification Table
+
+| Modification | Source Phase | Target Phase | Description |
+|---|---|---|---|
+| `cam.dist` write | Phase 5 (trigscare, lift) | Phase 1 (cam) | Horror events change interaction raycast distance |
+| `pl.MX/MY/MZ` write | Phase 5 (wfscare1, wfscare2v2, hide) | Phase 1 (pl) | Scare events force player look direction |
+| `pl.sens` read | Phase 5 (hide) | Phase 1 (pl) | Hiding system reads sensitivity for limited look |
+| `pl.shake` write | Phase 6 (menu) | Phase 1 (pl) | Settings toggle disables camera animation |
+| `pl.plavn` write | Phase 4 (wfplavn) | Phase 1 (pl) | One-shot smoothness override |
+| `pl.enabled` write | Phase 5 (wfcode, wfzap, key) | Phase 1 (pl) | Disable player during interactions |
+| `fl.enabled` write | Phase 5 (wfcode, wfzap, wfscare2v2) | Phase 1 (fl) | Disable flashlight during interactions |
+| `cam (Animator).enabled` write | Phase 5 (hide, wfcode, wfzap) | Phase 1 (cam) | Disable camera bob during interactions |
+| `vkl.use()` call | Phase 5 (trigscare) | Phase 2 (vkl) | Scare events toggle lights |
+| `vkl.on` read | Phase 5 (trigscare), Phase 2 (tr) | Phase 2 (vkl) | Check if lights are on |
+| `dver.enabled` write | Phase 5 (wfcode, key) | Phase 2 (dver) | Unlock door after puzzle/key |
+| `dver.use()` call | Phase 5 (wfcode1) | Phase 2 (dver) | Event triggers door open |
+| `lampa.x` write | Phase 5 (wfscare2) | Phase 2 (lampa) | Scare event changes lamp direction |
+| `tryaska.enabled` write | Phase 3 (lift) | Phase 1 (tryaska) | Elevator enables camera shake |
+| `lift.a()` call | Phase 3 (liftkn) | Phase 3 (lift) | Button → elevator |
+| `nm.enabled` write | Phase 5 (wfkill) | Phase 5 (nm) | Kill sequence stops NavMesh |
+| `shagi (AudioSource)` write | Phase 6 (menu) | Phase 1 (pl.shagi) | Pause silences footsteps |
+
+<!-- ==== FILE: LEARN/wrngfloor/StructureMap.md ==== -->
+# StructureMap — wrngfloor
+
+## Naming Conventions
+
+| Prefix | Meaning | Example |
+|---|---|---|
+| `SO_` | ScriptableObject (data definition) | `SO_DoorConfig` |
+| `Field_` | SerializeField wrapper (inspector-editable) | `Field_InteractionDistance` |
+| `W_` | Runtime wrapper (MonoBehaviour bridge) | `W_DoorAudio` |
+| `I` | Interface (cross-system contract) | `IInteractable` |
+| `DataService` | Pure C# logic (no MonoBehaviour) | `ElevatorStateMachine` |
+
+---
+
+## Phase 1 — Player Core
+
+### `_-PlayerSystem/` (3+ tightly coupled files → system folder)
+
+| Source File | Target Structure | Role |
+|---|---|---|
+| `pl.cs` | `PlayerController.cs` | Movement + Rigidbody force |
+| `pl.cs` (camera part) | `PlayerLook.cs` | Mouse look, MX/MY/MZ, smoothing |
+| `pl.cs` (audio part) | `W_PlayerFootsteps.cs` | Footstep audio volume/pitch |
+| `cam.cs` | `InteractionRaycaster.cs` | Raycast + dispatch `IInteractable.Use()` |
+| `fl.cs` | `FlashlightController.cs` | Flashlight hold, toggle, sway |
+| `tryaska.cs` | `CameraShake.cs` | Screen shake effect |
+| `lookat.cs` | `LookAtTarget.cs` | Utility — stays standalone |
+
+**Interface Candidates:**
+- `IInteractable` — replaces `SendMessage("use")` and name-based `GetComponent`. All interactable objects implement `void Use()`.
+  ```csharp
+  public interface IInteractable
+  {
+      void Use();
+  }
+  ```
+- `IPlayerState` — read-only access to player position, look direction, sensitivity. Prevents direct `pl.GetComponent<pl>().MX` access.
+
+**DataService Candidates:**
+- `PlayerInputService` — pure C# class that reads Input axes and returns movement vector, look delta, button states. Extracted from `pl.Update()`.
+
+**SO Candidates:**
+- `SO_PlayerConfig` — sensitivity, speed, run speed, FOV range, smoothing (plavn). Currently hardcoded in `pl.cs`.
+- `SO_InteractionConfig` — raycast distance, layer masks. Currently fields on `cam.cs`.
+
+---
+
+## Phase 2 — Doors & Switches
+
+### `_-DoorSystem/` (3+ tightly coupled files)
+
+| Source File | Target Structure | Role |
+|---|---|---|
+| `dver.cs` | `PhysicsDoor.cs : IInteractable` | Hinge door with torque, slam detect |
+| `wfdver1.cs` | `AnimatedDoor.cs : IInteractable` | Animation-driven door |
+| `key.cs` | `KeyPickup.cs : IInteractable` | Key → unlocks a door |
+
+**Interface Candidates:**
+- `IDoor` — `void Unlock()`, `bool IsLocked` — shared by PhysicsDoor and AnimatedDoor.
+
+**SO Candidates:**
+- `SO_DoorConfig` — torque value, angle thresholds (min/max/slmin/slmax), audio clips array. Currently all public fields on `dver.cs`.
+
+### Standalone Interactables (no system folder needed)
+
+| Source File | Target Structure | Role |
+|---|---|---|
+| `vkl.cs` | `LightSwitch.cs : IInteractable` | Switch with flicker |
+| `vklt.cs` | `SimpleLightSwitch.cs : IInteractable` | Switch without flicker |
+| `lampa.cs` | `AdjustableLamp.cs : IInteractable` | Rotatable lamp |
+| `klych.cs` | `ObjectToggle.cs : IInteractable` | Activates/deactivates object arrays |
+| `sound.cs` | `SoundTrigger.cs : IInteractable` | Plays audio on use |
+| `tr.cs` | `ConditionalActivator.cs` | Activates target when switch is on |
+| `wfpodsk.cs` | `HintPopup.cs : IInteractable` | Shows temporary UI hint |
+
+**SO Candidates:**
+- `SO_LightSwitchConfig` — flicker min/max time, on/off objects. Currently inlined in `vkl.cs`.
+
+---
+
+## Phase 3 — Elevator System
+
+### `_-ElevatorSystem/` (tightly coupled pair)
+
+| Source File | Target Structure | Role |
+|---|---|---|
+| `lift.cs` (states 0-5) | `ElevatorController.cs` | Core elevator movement + door open/close |
+| `lift.cs` (states 6-10) | `ElevatorSequence_Descent.cs` | Second descent + power-off sequence |
+| `lift.cs` (states 20-23) | `ElevatorSequence_NPCReveal.cs` | NPC arrival + ending |
+| `liftkn.cs` | `ElevatorButton.cs : IInteractable` | Button press triggers elevator |
+
+**DataService Candidates:**
+- `ElevatorStateMachine` — pure C# state machine with `enum ElevatorState`. Replaces raw `int x` field. Each state becomes a method or nested class.
+
+**SO Candidates:**
+- `SO_ElevatorConfig` — speed, door lerp rate, floor heights, audio clips. Currently hardcoded magic numbers in `lift.cs`.
+
+**Interface Candidates:**
+- `IElevatorCallable` — `void Call()` — elevator button interface.
+
+---
+
+## Phase 4 — Environment & Optimization
+
+### Standalone (all independent, no system folder needed)
+
+| Source File | Target Structure | Role |
+|---|---|---|
+| `opt.cs` | `RoomCulling.cs` | Room activation manager |
+| `opttrig.cs` | `RoomCullingTrigger.cs` | Zone trigger for room culling |
+| `mirror.cs` | `MirrorReflection.cs` | Real-time mirror effect |
+| `veter.cs` | `WindAudioFollower.cs` | Wind audio follows player Z |
+| `audpitch.cs` | `DistancePitchController.cs` | Distance-based audio pitch |
+| `wfplavn.cs` | `PlayerSmoothnessOverride.cs` | One-shot smoothness set |
+| `kadr25.cs` | `FrameRateCameraSwap.cs` | Horror low-FPS camera effect |
+| `Wftpscam.cs` | `ThirdPersonDeathCam.cs` | Wall-collision third-person camera |
+
+**SO Candidates:**
+- `SO_RoomCullingConfig` — room list + initial states. Currently arrays on `opt.cs`.
+
+---
+
+## Phase 5 — Horror Events & NPC
+
+### `_-NPCSystem/` (3 tightly coupled files)
+
+| Source File | Target Structure | Role |
+|---|---|---|
+| `nm.cs` | `NPCWalker.cs` | NavMesh walk to waypoint |
+| `wfkill.cs` | `NPCKillSequence.cs` | Detect player → kill animation → game over |
+| `wfscare1.cs` | `NPCScareEvent.cs` | NPC animates on player sight |
+
+### `_-PuzzleSystem/` (3 tightly coupled files)
+
+| Source File | Target Structure | Role |
+|---|---|---|
+| `wfcode.cs` | `CombinationLock.cs : IInteractable` | 4-cylinder code puzzle |
+| `wfzap.cs` | `LockInspection.cs : IInteractable` | Camera zoom to examine lock |
+| `hide.cs` | `HidingSpot.cs : IInteractable` | Player hide in furniture |
+
+### `_-ScareEventSystem/` (3+ scripted scare types)
+
+| Source File | Target Structure | Role |
+|---|---|---|
+| `wfscare2.cs` | `ScareEvent_NPCAppear.cs` | NPC appears, animates on trigger |
+| `wfscare2v2.cs` | `ScareEvent_ForcedLook.cs` | Force player to look at NPC |
+| `addforcescr.cs` | `ScareEvent_DoorSlam.cs` | Door slams with FOV flash |
+| `trigscare.cs` | `ScareEvent_LightsOut.cs` | Lights off + NPC animation |
+| `wfcode1.cs` | `ScareEvent_WrongFloor.cs` | Ambient horror sequence |
+| `golova.cs` | `SkullInspection.cs : IInteractable` | Head examination |
+
+### Standalone
+
+| Source File | Target Structure | Role |
+|---|---|---|
+| `f.cs` | `FlashlightPuzzle.cs` | Toggle light reveals hidden objects |
+| `f2.cs` | `DarknessFearEffect.cs` | Voice + heartbeat when light off |
+| `wfsatr.cs` | `TriggerActivator.cs` | Activate/deactivate on trigger enter |
+| `wfcolis.cs` | `CollisionPopup.cs` | Show popup on collision |
+| `wftryaska.cs` | `WorldObjectShake.cs` | Object shake + LookAt |
+
+**DataService Candidates:**
+- `CombinationLockLogic` — pure C# class with `int[] digits`, `bool Check(int[] code)`, `void IncrementDigit(int index, int direction)`. Extracted from `wfcode.cs` input handling.
+
+**SO Candidates:**
+- `SO_CombinationLockConfig` — correct code digits, cylinder count, input delay. Hardcoded as `1990` in `wfcode.cs`.
+- `SO_ScareEventConfig` — timing values, FOV snap values, audio clips per scare event.
+
+**Interface Candidates:**
+- `IScareEvent` — `void Trigger()`, `bool HasTriggered` — standardizes scare event lifecycle.
+
+---
+
+## Phase 6 — UI & Menu
+
+### Standalone
+
+| Source File | Target Structure | Role |
+|---|---|---|
+| `menu.cs` | `PauseMenu.cs` | Pause, settings, language, quit |
+
+**SO Candidates:**
+- `SO_GameSettings` — runtime settings (sensitivity, volume, language, shake toggle). Currently written directly to `pl` fields and `AudioListener`.
+
+---
+
+## Summary: Interface Map
+
+| Interface | Implementors | Purpose |
+|---|---|---|
+| `IInteractable` | PhysicsDoor, AnimatedDoor, KeyPickup, LightSwitch, SimpleLightSwitch, AdjustableLamp, ObjectToggle, SoundTrigger, HintPopup, CombinationLock, LockInspection, HidingSpot, SkullInspection, ElevatorButton | Replaces SendMessage("use") |
+| `IDoor` | PhysicsDoor, AnimatedDoor | Shared lock/unlock contract |
+| `IScareEvent` | All scare event scripts | Standardized trigger lifecycle |
+| `IPlayerState` | PlayerController | Read-only player state for external systems |
+
+## Summary: DataService Map
+
+| DataService | Extracted From | Purpose |
+|---|---|---|
+| `PlayerInputService` | `pl.cs` | Pure input reading |
+| `ElevatorStateMachine` | `lift.cs` | State machine logic |
+| `CombinationLockLogic` | `wfcode.cs` | Puzzle validation |
+
+## Summary: SO Map
+
+| ScriptableObject | Replaces | Fields |
+|---|---|---|
+| `SO_PlayerConfig` | Hardcoded values in `pl.cs` | sens, speed, runSpeed, fovMin/Max, plavn |
+| `SO_InteractionConfig` | Fields on `cam.cs` | dist, layerMask |
+| `SO_DoorConfig` | Fields on `dver.cs` | torque, angleMin/Max, slamThresholds, audioClips |
+| `SO_LightSwitchConfig` | Fields on `vkl.cs` | flickerMinTime, flickerMaxTime, objectArrays |
+| `SO_ElevatorConfig` | Magic numbers in `lift.cs` | speed, doorLerpRate, floorHeights, audioClips |
+| `SO_CombinationLockConfig` | Hardcoded in `wfcode.cs` | correctCode, cylinderCount, inputDelay |
+| `SO_GameSettings` | Direct writes in `menu.cs` | sensitivity, volume, language, shakeEnabled |
+
+<!-- ==== FILE: LEARN/wrngfloor/SystemPortabilityMap.md ==== -->
+# SystemPortabilityMap — wrngfloor
+
+## Portability Levels
+
+| Level | Definition |
+|---|---|
+| **L0** | Project-specific — tightly coupled to wrngfloor scene, hardcoded positions/values, not reusable |
+| **L1** | Configurable — could work in another project with SO config changes, minor refactoring |
+| **L2** | Portable — generic system, drop into any Unity project with minimal wiring |
+
+---
+
+## Classification
+
+### L2 — Portable (drop-in reusable)
+
+| Script | Target Name | Why Portable |
+|---|---|---|
+| `lookat.cs` | `LookAtTarget` | Generic LookAt — zero project coupling |
+| `tryaska.cs` | `CameraShake` | Generic shake — parameterized random rotation |
+| `audpitch.cs` | `DistancePitchController` | Generic distance→pitch — works anywhere |
+| `sound.cs` | `SoundTrigger` | Generic audio player on use |
+| `klych.cs` | `ObjectToggle` | Generic activate/deactivate arrays |
+| `wfpodsk.cs` | `HintPopup` | Generic timed popup — any UI |
+| `wfsatr.cs` | `TriggerActivator` | Generic trigger zone → activate/deactivate |
+| `wfcolis.cs` | `CollisionPopup` | Generic collision → popup |
+| `opt.cs` | `RoomCulling` | Generic room activation manager |
+| `opttrig.cs` | `RoomCullingTrigger` | Generic zone-based room culling |
+| `veter.cs` | `WindAudioFollower` | Generic audio position follower (Z-axis) |
+| `wftryaska.cs` | `WorldObjectShake` | Generic object shake + LookAt |
+| `kadr25.cs` | `FrameRateCameraSwap` | Generic frame-rate camera alternation |
+
+### L1 — Configurable (reusable with SO/config changes)
+
+| Script | Target Name | What Needs Config |
+|---|---|---|
+| `pl.cs` | `PlayerController` + `PlayerLook` | Speed, sensitivity, FOV range → SO_PlayerConfig |
+| `cam.cs` | `InteractionRaycaster` | Distance, layer mask → SO_InteractionConfig. IInteractable interface makes it generic. |
+| `fl.cs` | `FlashlightController` | Sway parameters, light settings → configurable |
+| `dver.cs` | `PhysicsDoor` | Torque, angles, audio → SO_DoorConfig |
+| `vkl.cs` | `LightSwitch` | Flicker timing → SO_LightSwitchConfig |
+| `vklt.cs` | `SimpleLightSwitch` | Already generic, just needs IInteractable |
+| `lampa.cs` | `AdjustableLamp` | Rotation presets → could be SO |
+| `key.cs` | `KeyPickup` | Generic if door reference is via IDoor |
+| `nm.cs` | `NPCWalker` | Generic NavMesh walk — just needs waypoint |
+| `hide.cs` | `HidingSpot` | Camera positions/limits → configurable |
+| `menu.cs` | `PauseMenu` | Bindings → SO_GameSettings |
+| `mirror.cs` | `MirrorReflection` | Generic mirror math — targets configurable |
+| `Wftpscam.cs` | `ThirdPersonDeathCam` | Generic wall-clip camera |
+| `tr.cs` | `ConditionalActivator` | Generic conditional on vkl.on → could generalize to any bool source |
+
+### L0 — Project-Specific (tied to wrngfloor)
+
+| Script | Target Name | Why L0 |
+|---|---|---|
+| `lift.cs` | `ElevatorController` | 23-state machine with hardcoded positions (y=3.33242, y=-3, y=-4.73), specific NPC reveal sequence, specific floor layout |
+| `liftkn.cs` | `ElevatorButton` | Trivially generic, but semantically part of elevator system |
+| `wfcode.cs` | `CombinationLock` | Code 1990 hardcoded, specific cylinder meshes/materials, specific door reference |
+| `wfcode1.cs` | `ScareEvent_WrongFloor` | Hardcoded x/z position checks (22.8, 6.5, 22, 19.1), specific object references |
+| `wfkill.cs` | `NPCKillSequence` | Specific NPC + death camera + scene-specific destruction |
+| `wfscare1.cs` | `NPCScareEvent` | Hardcoded timing (1.75s), forced look angles (-90, 10), specific NPC |
+| `wfscare2.cs` | `ScareEvent_NPCAppear` | Hardcoded z-position triggers (3.5, 4.0), specific lamp reference |
+| `wfscare2v2.cs` | `ScareEvent_ForcedLook` | Hardcoded position checks (17.5, 18.0), forced look angles (270, 10) |
+| `addforcescr.cs` | `ScareEvent_DoorSlam` | Generic-ish but has specific force values and FOV flash sequence |
+| `trigscare.cs` | `ScareEvent_LightsOut` | Hardcoded position (-1.7, -2.02, 2.56), specific vkl/cam coupling |
+| `golova.cs` | `SkullInspection` | Specific head/eye/camera setup |
+| `f.cs` | `FlashlightPuzzle` | Specific reveal sequence (4 objects) |
+| `f2.cs` | `DarknessFearEffect` | Specific heartbeat/voice timing |
+| `wfplavn.cs` | `PlayerSmoothnessOverride` | One-shot destroy — specific value 10f |
+| `wfdver1.cs` | `AnimatedDoor` | Specific animation trigger "a" |
+
+---
+
+## Migration Priority
+
+**Migrate L2 scripts first** — they are the easiest wins and establish patterns.
+**Migrate L1 scripts second** — they become L2 once SO configs are extracted.
+**L0 scripts last** — they require the most project-specific knowledge and will stay somewhat coupled to the scene.
+
+| Priority | Count | Action |
+|---|---|---|
+| 1st | 13 L2 scripts | Rename, add IInteractable, done |
+| 2nd | 14 L1 scripts | Rename, extract SO config, add interfaces |
+| 3rd | 15 L0 scripts | Refactor with DataServices, extract hardcoded values to SO where possible |
+
+<!-- ==== FILE: LEARN/wrngfloor/surfer.md ==== -->
+# surfer — wrngfloor
+
+## Prompt 1: Initial source analysis
+
+**Date:** 2025-05-16
+
+**Action:** Full project initialization — read all 38 game scripts in `MAIN-SOURCE/wrngfloor/Scripts/Assembly-CSharp/`, analyzed .stub file (11,211 files, 765 MB), mapped dependency graph, identified god objects and coupling hotspots.
+
+**Key Findings:**
+- Horror first-person game, Unity HDRP, single scene (174 MB)
+- 38 actionable game scripts, all extend MonoBehaviour directly (flat hierarchy)
+- Zero events/interfaces — all coupling via direct references + SendMessage
+- `cam.cs` uses fragile name-based GetComponent dispatch
+- `pl.cs` is the most depended-on script (20+ dependents)
+- `lift.cs` is the largest/most complex (23-state elevator machine)
+- No singletons, no ScriptableObjects, no save system
+- Heavy GetComponent calls in Update (uncached)
+- Russian-named variables throughout (dver=door, shagi=footsteps, vkl=switch, etc.)
+
+**Generated:**
+- ARCHITECTURE.md — full dependency graph, coupling hotspots, asset inventory
+- PhaseMap.md — 6 phases, 41 files, cross-phase modification table
+- StructureMap.md — system folders, interfaces, DataServices, SOs per phase
+- GOAL.md — architecture rules, naming conventions, decoupling patterns, migration order
+- Estimate.md — 20h code + 8h overhead = 28h total
+- SystemPortabilityMap.md — 13 L2 (portable), 14 L1 (configurable), 15 L0 (project-specific)
+
