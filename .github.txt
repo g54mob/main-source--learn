@@ -1,18 +1,66 @@
-<!-- ==== FILE: .github/copilot-instructions.md ==== -->
-# Project Guidelines
+<!-- ==== FILE: .windsurf/Manual.md ==== -->
+# Windsurf Workflows — Usage Guide
 
-## Workspace Structure
+## How to Trigger
+
+In the Cascade chat panel, type `/` followed by the workflow name:
+
+```
+/init
+/build-phase
+/audit-phase
+/decouple-check
+/cross-phase-mod
+```
+
+A dropdown appears as you type. Select the workflow → Cascade reads the `.md` file and executes steps in order.
+
+---
+
+## Workflow Reference
+
+| Command | When to Use | What It Does |
+|---------|------------|--------------|
+| `/init` | Once per new project | Reads ALL `.cs` in Assembly-CSharp + `.stub` file, generates ARCHITECTURE.md, GOAL.md, PhaseMap.md, StructureMap.md, Estimate.md, SystemPortabilityMap.md, surfer.md |
+| `/build-phase` | Every new phase | Reads all reference docs + original source, generates all scripts + GUIDE.md + FLOW.md + Dependency.md per system, then auto-runs audit/decouple/cross-phase checks |
+| `/audit-phase` | After any delivery | Method-by-method comparison against original source + architecture rule violations scan + doc consistency check |
+| `/decouple-check` | After modifying any system | Scans a `_-Systems/` folder for concrete cross-system imports, classifies as FREE/interface/concrete, suggests fixes |
+| `/cross-phase-mod` | Before typing a new phase | Checks if the new phase references methods/fields that don't exist in earlier phases yet, generates exact code diffs |
+
+---
+
+## Typical Flow
+
+```
+New project:
+  /init  →  generates all docs from raw source
+
+Per phase:
+  /build-phase      →  generates everything for one phase
+    ├── /audit-phase       (auto-runs as step 16)
+    ├── /decouple-check    (auto-runs as step 17)
+    └── /cross-phase-mod   (auto-runs as step 18)
+
+Ad-hoc:
+  /decouple-check   →  after editing any system
+  /audit-phase      →  after any manual changes
+  /cross-phase-mod  →  before hand-typing a new phase
+```
+
+---
+
+## Expected Folder Structure
 
 ```
 ROOT/
-├── .github/
-│   ├── copilot-instructions.md   ← this file (always-on project context)
-│   └── prompts/
-│       ├── init.prompt.md            ← /init
-│       ├── build-phase.prompt.md     ← /build-phase
-│       ├── audit-phase.prompt.md     ← /audit-phase
-│       ├── decouple-check.prompt.md  ← /decouple-check
-│       └── cross-phase-mod.prompt.md ← /cross-phase-mod
+├── .windsurf/
+│   ├── Manual.md              ← this file (user reference, NOT a workflow)
+│   └── workflows/
+│       ├── init.md            ← /init
+│       ├── build-phase.md     ← /build-phase
+│       ├── audit-phase.md     ← /audit-phase
+│       ├── decouple-check.md  ← /decouple-check
+│       └── cross-phase-mod.md ← /cross-phase-mod
 ├── MAIN-SOURCE/
 │   ├── project-0/             ← raw source (read-only)
 │   ├── entire-project-0.stub  ← full hierarchy including excluded assets
@@ -33,46 +81,21 @@ ROOT/
     └── project-1/
 ```
 
-## Workflow Reference
-
-| Prompt | When to Use | What It Does |
-|--------|------------|--------------|
-| `/init` | Once per new project | Reads ALL `.cs` in Assembly-CSharp + `.stub` file, generates ARCHITECTURE.md, GOAL.md, PhaseMap.md, StructureMap.md, Estimate.md, SystemPortabilityMap.md, surfer.md |
-| `/build-phase` | Every new phase | Reads all reference docs + original source, generates all scripts + GUIDE.md + FLOW.md + Dependency.md per system, then auto-runs audit/decouple/cross-phase checks |
-| `/audit-phase` | After any delivery | Method-by-method comparison against original source + architecture rule violations scan + doc consistency check |
-| `/decouple-check` | After modifying any system | Scans a `_-Systems/` folder for concrete cross-system imports, classifies as FREE/interface/concrete, suggests fixes |
-| `/cross-phase-mod` | Before typing a new phase | Checks if the new phase references methods/fields that don't exist in earlier phases yet, generates exact code diffs |
-
-## Typical Flow
-
-```
-New project:
-  /init  →  generates all docs from raw source
-
-Per phase:
-  /build-phase      →  generates everything for one phase
-    ├── /audit-phase       (auto-runs as step 16)
-    ├── /decouple-check    (auto-runs as step 17)
-    └── /cross-phase-mod   (auto-runs as step 18)
-
-Ad-hoc:
-  /decouple-check   →  after editing any system
-  /audit-phase      →  after any manual changes
-  /cross-phase-mod  →  before hand-typing a new phase
-```
+---
 
 ## Key Facts
 
-- **Prompts persist across conversations** — they're `.prompt.md` files on disk, not chat memory
-- **Edit anytime** — changes to prompt files take effect on next invocation
-- **Each prompt is standalone** — `/decouple-check` works independently, doesn't require `/build-phase` first
+- **Only files in `.windsurf/workflows/` become slash commands** — anything else in `.windsurf/` is just regular files
+- **Workflows persist across conversations** — they're `.md` files on disk, not chat memory
+- **Edit anytime** — changes to workflow `.md` files take effect on next invocation
+- **`// turbo` annotation** — add above a step to auto-run safe terminal commands without approval
+- **Cascade asks clarifying questions** — workflows with `{PROJECT}` or `{PHASE}` placeholders prompt you for values
+- **Each workflow is standalone** — `/decouple-check` works independently, doesn't require `/build-phase` first
 - **`/build-phase` chains the others** — steps 16-18 run audit, decouple, and cross-phase checks automatically
-- **Placeholders** — prompts with `{PROJECT}` or `{PHASE}` will ask you for values at the start
 
-<!-- ==== FILE: .github/prompts/audit-phase.prompt.md ==== -->
+<!-- ==== FILE: .windsurf/workflows/audit-phase.md ==== -->
 ---
-description: "Post-delivery self-audit — method-by-method source comparison + architecture rule check. Use when: after any delivery, verifying source fidelity, checking architecture violations, doc consistency"
-agent: "agent"
+description: Post-delivery self-audit — method-by-method source comparison + architecture rule check
 ---
 
 ## Setup
@@ -111,10 +134,9 @@ agent: "agent"
 
 8. Output: `| Check | Pass/Fail | Details |`
 
-<!-- ==== FILE: .github/prompts/build-phase.prompt.md ==== -->
+<!-- ==== FILE: .windsurf/workflows/build-phase.md ==== -->
 ---
-description: "Build a new phase from scratch — reads all reference docs, generates scripts + documentation. Use when: starting a new phase, generating phase scripts, creating GUIDE.md FLOW.md Dependency.md"
-agent: "agent"
+description: Build a new phase from scratch — reads all reference docs, generates scripts + documentation
 ---
 
 ## Setup
@@ -153,10 +175,9 @@ agent: "agent"
 18. Run `/cross-phase-mod` for this phase
 19. Append entry to `LEARN/{PROJECT}/surfer.md`
 
-<!-- ==== FILE: .github/prompts/cross-phase-mod.prompt.md ==== -->
+<!-- ==== FILE: .windsurf/workflows/cross-phase-mod.md ==== -->
 ---
-description: "Check if new phase references methods/fields missing from earlier phases. Use when: before typing a new phase, verifying cross-phase dependencies exist, generating modification diffs"
-agent: "agent"
+description: Check if new phase references methods/fields missing from earlier phases
 ---
 
 ## Setup
@@ -179,10 +200,9 @@ agent: "agent"
 
 8. Add to `LEARN/{PROJECT}/phase-{PHASE}/GUIDE.md` → "Modifications to Earlier Phases" section
 
-<!-- ==== FILE: .github/prompts/decouple-check.prompt.md ==== -->
+<!-- ==== FILE: .windsurf/workflows/decouple-check.md ==== -->
 ---
-description: "Scan a system for concrete cross-system deps — the #1 rework cause. Use when: after modifying any system, checking coupling, verifying portability level"
-agent: "agent"
+description: Scan a system for concrete cross-system deps — the #1 rework cause
 ---
 
 ## Setup
@@ -218,10 +238,9 @@ agent: "agent"
 
 5. `# SystemName — L{n} ✅/❌` with deps table
 
-<!-- ==== FILE: .github/prompts/init.prompt.md ==== -->
+<!-- ==== FILE: .windsurf/workflows/init.md ==== -->
 ---
-description: "Analyse a raw source project and bootstrap all architecture docs from scratch. Use when: starting a new project, initial source analysis, generating ARCHITECTURE.md GOAL.md PhaseMap.md StructureMap.md Estimate.md SystemPortabilityMap.md surfer.md"
-agent: "agent"
+description: Analyse a raw source project and bootstrap all architecture docs from scratch
 ---
 
 ## Setup
@@ -259,9 +278,9 @@ agent: "agent"
 ## Generate PhaseMap.md
 
 10. Group all source scripts into logical phases by dependency order:
-    - Phase = set of scripts that can be built and tested independently
-    - Rule: each phase depends only on earlier phases, never forward
-    - For each phase: file list, "What It Looks Like When Running", difficulty rating, weight %
+   - Phase = set of scripts that can be built and tested independently
+   - Rule: each phase depends only on earlier phases, never forward
+   - For each phase: file list, "What It Looks Like When Running", difficulty rating, weight %
 11. Create `LEARN/{PROJECT}/PhaseMap.md` with all phases + cross-phase modification tables
 
 ## Generate StructureMap.md
